@@ -314,3 +314,66 @@ requester portal are planned and not built. The milestone plan is in
 [`docs/superpowers/plans/2026-11-07-tadbeerly-project-plan.md`](docs/superpowers/plans/2026-11-07-tadbeerly-project-plan.md).
 Passkeys, SMS codes and trusted devices are not available either.
 
+
+## Deployment
+
+Target: Netlify, with the Netlify DB (Neon) extension. Next.js is auto-detected,
+so there is no `netlify.toml`.
+
+Production URL: _to be filled in after the first deploy_
+
+### Database
+
+Enable the Netlify DB extension on the site. It sets `NETLIFY_DATABASE_URL`;
+the app falls back to it when `DATABASE_URL` is not set, and `DATABASE_URL` wins
+when both are. Deploy previews must use a separate database (a Netlify DB
+branch, or a second database set as the deploy-preview context's
+`DATABASE_URL`), never production.
+
+### Environment variables
+
+| Variable | Value |
+| --- | --- |
+| `SESSION_SECRET` | `openssl rand -hex 32` |
+| `MFA_ENCRYPTION_KEY` | `openssl rand -hex 32` (separate from the session secret) |
+| `CRON_SECRET` | `openssl rand -hex 32`. Production context only: leave it **unset** in deploy previews. |
+| `APP_URL` | The site's public URL, used for links in emails |
+| `EMAIL_TRANSPORT` | `console` until Graph is configured (emails then appear in the function logs) |
+| `EMAIL_FROM`, `EMAIL_FROM_NAME` | Sender address and display name |
+| `STORAGE_BACKEND` | Leave unset: Netlify Blobs is detected on Netlify |
+
+### Release steps
+
+1. Migrate production: `DATABASE_URL="<production connection string>" npm run db:migrate`
+2. Create the first organization: `DATABASE_URL="<production connection string>" npm run org:create`
+3. **Never run `db:seed` in production.** It refuses non-local hosts anyway.
+
+### Platform notes
+
+- The scheduled function `netlify/functions/notifications.ts` (`*/5 * * * *`)
+  runs on production deploys only, so previews and branch deploys never send
+  mail. It POSTs to `/api/cron/notifications` with an `x-cron-secret` header.
+  Without `CRON_SECRET` it logs a warning and returns 200 "CRON_SECRET not set"
+  without calling the endpoint.
+- Audit IP addresses come from `x-forwarded-for`, which Netlify's proxy sets.
+- The build fetches IBM Plex from Google Fonts. A transient failure there is
+  cleared by redeploying.
+- Moving email off `console`: set `EMAIL_TRANSPORT=graph`, with `EMAIL_FROM` a
+  real mailbox, and the `GRAPH_*` variables (they fall back to the
+  `SHAREPOINT_*` ones). The Entra app registration needs the Microsoft Graph
+  `Mail.Send` application permission with admin consent, ideally restricted by
+  an Application Access Policy. Check it with `npm run email:graph-check`.
+
+### M0 acceptance
+
+Run on the deployed site:
+
+- [ ] Sign in as an Administrator
+- [ ] Forced two-step enrolment completes
+- [ ] Sign out, then sign back in with an authenticator code
+- [ ] Invite an agent (under the console transport the email is in the function logs)
+- [ ] Accept the invitation and land on the empty Tickets screen with the full shell
+- [ ] The audit trail shows every step above
+- [ ] The scheduled function's log shows the endpoint's JSON response with status 200 from `/api/cron/notifications` (not the "CRON_SECRET not set" message)
+
+Outcome: _to be recorded (date, URL, result)_
