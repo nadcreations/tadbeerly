@@ -34,10 +34,12 @@ vi.mock("next/navigation", () => ({
     throw new Error(`REDIRECT:${url}`);
   },
 }));
-const afterTasks: Promise<unknown>[] = [];
+// after() callbacks are held, not started, so "nothing has happened yet" is
+// deterministic rather than a race against the next query.
+const afterTasks: Array<() => unknown> = [];
 vi.mock("next/server", () => ({
   after: (task: () => unknown) => {
-    afterTasks.push(Promise.resolve().then(task));
+    afterTasks.push(task);
   },
 }));
 
@@ -224,7 +226,7 @@ describe("requestReset action", () => {
     const unknown = await requestReset({}, form("ghost@x.example"));
     expect(known).toEqual(unknown);
     expect(known.success).toBe("If an account exists for that address, we've emailed a reset link.");
-    await Promise.all(afterTasks.splice(0));
+    await Promise.all(afterTasks.splice(0).map((task) => task()));
     expect(await count(emailNotifications)).toBe(1);
   });
 

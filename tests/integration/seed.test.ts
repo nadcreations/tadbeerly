@@ -14,7 +14,9 @@ afterEach(() => {
 });
 
 describe("seed", () => {
-  test("is repeatable and keeps tenants apart", async () => {
+  // Seeding hashes a dozen scrypt passwords, twice here. That is CPU-bound and
+  // overran the 5s default on a loaded machine, so give it room.
+  test("is repeatable and keeps tenants apart", { timeout: 30_000 }, async () => {
     await seed();
     await seed();
     expect(await count(organizations)).toBe(2);
