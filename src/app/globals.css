@@ -1,0 +1,362 @@
+@import "tailwindcss";
+
+/*
+ * Tadbeerly design tokens.
+ *
+ * The palette is drawn from the drawing office rather than from the usual SaaS
+ * dashboard: warm drafting-paper ground, blue-black drafting ink, and a single
+ * cyanotype blue for anything actionable. Hairline rules carry the structure so
+ * that dense registers stay legible without a drop shadow under every element.
+ *
+ * The scale names (brand-*, ink-*) are deliberately unchanged from the first
+ * build — every page already speaks them, so re-pointing the values restyles
+ * the whole application without touching a single page file.
+ */
+
+@theme {
+  /* The QDM lockup's gold, #c59044, as the 500. Lighter steps carry the page;
+   * the saturated ones are kept for what is actionable, so a register can be
+   * warm throughout without the accent losing its meaning.
+   *
+   * This replaced an azure scale. Every page already spoke brand-*, so
+   * re-pointing the values recoloured the whole application without touching a
+   * single page file — which is the reason the scales are named for their role
+   * rather than for a colour. */
+  --color-brand-50: #fdf9f2;
+  --color-brand-100: #f9efdd;
+  --color-brand-200: #f2ddb9;
+  --color-brand-300: #e7c48d;
+  --color-brand-400: #d9a75f;
+  --color-brand-500: #c59044;
+  /* 600 carries white text — the primary button, the sidebar's count pill, the
+   * filter chips. A gold picked by eye landed at 3.91:1 against white, under
+   * the 4.5:1 that 13px text needs and well under the 5.32:1 the blue it
+   * replaced managed. Darkened until it measured 4.61:1, and the steps below
+   * re-spaced to keep the ramp even. */
+  --color-brand-600: #9c6b2b;
+  --color-brand-700: #7f5623;
+  --color-brand-800: #63431c;
+  --color-brand-900: #452f14;
+
+  /* Warm neutral. The greys have to warm up with the accent: a blue-grey body
+   * text under a gold heading is the tonal clash that makes a page read as two
+   * palettes stacked on each other. */
+  --color-ink-50: #faf8f4;
+  --color-ink-100: #f4f0e9;
+  --color-ink-200: #e8e1d5;
+  --color-ink-300: #d5cabb;
+  /* The lightest step that still clears 3:1 on the paper ground, which is what
+   * placeholders, disabled controls and icon strokes need to stay legible. */
+  --color-ink-400: #998d7c;
+  --color-ink-500: #786c5d;
+  --color-ink-600: #5d5347;
+  --color-ink-700: #473f35;
+  --color-ink-800: #2c261f;
+  --color-ink-900: #191410;
+
+  /* The ground the application sits on — light and faintly warm, so white
+   * cards lift off it instead of dissolving into it. */
+  --color-paper: #fbf7f0;
+
+  /* Elevation. Two tints of the ink colour rather than black, so a raised
+   * surface reads as lit rather than smudged. */
+  /* Tinted with the warm near-black rather than the cool one the blue scheme
+   * used. A shadow is a large, soft area of colour: left cool under a warm
+   * interface, every raised card sat in a faintly blue haze. */
+  --shadow-card: 0 1px 2px rgb(25 20 16 / 0.05), 0 1px 3px rgb(25 20 16 / 0.07);
+  --shadow-card-hover: 0 2px 4px rgb(25 20 16 / 0.07),
+    0 4px 10px rgb(25 20 16 / 0.09);
+  --shadow-pop: 0 4px 6px rgb(25 20 16 / 0.05), 0 12px 28px rgb(25 20 16 / 0.13);
+
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  /* Drafting-precise, not pill-soft. */
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink-900);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Numbers in a register are compared column-wise far more often than they are
+ * read as prose. Line them up everywhere by default. */
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One consistent focus treatment across links, buttons and controls. Keyboard
+ * users get the same ring the mouse never shows. */
+:focus-visible {
+  outline: 2px solid var(--color-brand-600);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    /*
+     * The delay has to go too, not just the duration. Every load animation
+     * here uses fill-mode "both", which holds the "from" keyframe for the
+     * whole delay — a staggered reveal would otherwise leave someone who asked
+     * for less motion looking at an empty page for a second before it
+     * appeared, which is the opposite of what they asked for.
+     */
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * Register striping.
+ *
+ * Stated here rather than on each row so every table stripes the same way and
+ * no page can drift. Both rules are written at the same specificity, with hover
+ * second so it wins on a striped row — a row-level Tailwind hover class would
+ * have beaten the stripe anyway, but relying on that ordering silently is how
+ * these things break later.
+ */
+.tb-table tbody tr:nth-child(even) {
+  background-color: var(--color-ink-100);
+}
+
+.tb-table tbody tr:hover {
+  background-color: var(--color-brand-50);
+}
+
+/*
+ * Columns that stay put while the rest of a wide table scrolls under them.
+ *
+ * Each frozen cell needs its own opaque background. The stripe is painted on
+ * the row, and a row's own scrolling cells slide *underneath* its frozen ones —
+ * so without a background of their own you would read the register through the
+ * document number. The three rules below restate the row's colour in each of
+ * its states; they have to agree with the striping above, and they are next to
+ * it so a change to one is a change in front of the other.
+ */
+.tb-table .tb-freeze {
+  position: sticky;
+  z-index: 1;
+  background-color: #fff;
+}
+
+.tb-table tbody tr:nth-child(even) .tb-freeze {
+  background-color: var(--color-ink-100);
+}
+
+.tb-table tbody tr:hover .tb-freeze {
+  background-color: var(--color-brand-50);
+}
+
+/* The header sits above the body's frozen cells as well as beside them. */
+.tb-table thead .tb-freeze {
+  z-index: 2;
+  background-color: var(--color-ink-200);
+}
+
+/*
+ * The seam. Without a visible edge the frozen block and the scrolling one read
+ * as a single table whose middle columns have gone missing.
+ */
+.tb-table .tb-freeze-edge {
+  border-inline-end: 1px solid var(--color-ink-300);
+}
+
+/*
+ * A narrow column — a tick box, a row number — where the standard cell padding
+ * is most of the width.
+ *
+ * Written here rather than as a px-2 in the markup because the padding it has
+ * to beat is also a single class, so which of them won would depend on the
+ * order Tailwind happened to emit them in. Two classes deep, this wins by
+ * specificity and keeps winning.
+ */
+.tb-table .tb-tight {
+  padding-inline: 0.5rem;
+}
+
+/*
+ * Landing page load sequence.
+ *
+ * One orchestrated reveal rather than effects scattered down the page: the
+ * hero's parts arrive in reading order, and nothing below the fold animates at
+ * all. The global prefers-reduced-motion rule above already flattens this to
+ * nothing, so no separate guard is needed.
+ */
+@keyframes tb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tb-rise {
+  animation: tb-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * Dashboard load sequence.
+ *
+ * One orchestrated reveal, in the order the page is read: the tiles arrive,
+ * the panels settle, then each chart draws its own values. The marks animate
+ * from nothing to the figure they represent, so the motion carries the data
+ * rather than decorating it — a bar that grows to a third of the plot has told
+ * you something before it stops.
+ *
+ * Each rule ends on the element's own computed value, so there is no "to"
+ * keyframe: the reduced-motion rule above collapses the duration to nothing and
+ * every mark lands on its final geometry.
+ */
+/* A column grows off the baseline it is measured from, so its origin is the
+   bottom edge. */
+@keyframes tb-col {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+.tb-col {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: tb-col 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* The gap is deliberately far longer than the circle, so only the dash grows. */
+@keyframes tb-arc {
+  from {
+    stroke-dasharray: 0 9999;
+  }
+}
+
+.tb-arc {
+  animation: tb-arc 0.6s cubic-bezier(0.33, 1, 0.68, 1) both;
+}
+
+@keyframes tb-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.tb-fade {
+  animation: tb-fade 0.45s ease-out both;
+}
+
+/*
+ * Correspondence bodies.
+ *
+ * Tailwind's reset strips headings and lists back to plain blocks, which is
+ * right everywhere else and wrong here — this is the one place the application
+ * renders authored prose. Used by both the editor and the reader so a message
+ * looks the same while it is being written as it does when it arrives.
+ */
+.tb-prose > :first-child {
+  margin-top: 0;
+}
+.tb-prose > :last-child {
+  margin-bottom: 0;
+}
+.tb-prose p {
+  margin: 0 0 0.65rem;
+  line-height: 1.6;
+}
+.tb-prose h3 {
+  margin: 1.15rem 0 0.4rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-ink-900);
+}
+.tb-prose h4 {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-ink-800);
+}
+.tb-prose ul,
+.tb-prose ol {
+  margin: 0 0 0.65rem;
+  padding-inline-start: 1.35rem;
+  line-height: 1.6;
+}
+.tb-prose ul {
+  list-style: disc;
+}
+.tb-prose ol {
+  list-style: decimal;
+}
+.tb-prose li {
+  margin: 0.15rem 0;
+}
+.tb-prose blockquote {
+  margin: 0 0 0.65rem;
+  border-inline-start: 2px solid var(--color-brand-300);
+  padding: 0.1rem 0 0.1rem 0.75rem;
+  color: var(--color-ink-600);
+}
+.tb-prose a {
+  color: var(--color-brand-700);
+  text-decoration: underline;
+}
+.tb-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background-color: var(--color-ink-100);
+  border-radius: 3px;
+  padding: 0.05rem 0.25rem;
+}
+.tb-prose pre {
+  margin: 0 0 0.65rem;
+  overflow-x: auto;
+  border-radius: 4px;
+  background-color: var(--color-ink-900);
+  padding: 0.6rem 0.75rem;
+  color: var(--color-ink-100);
+}
+.tb-prose pre code {
+  background: none;
+  padding: 0;
+}
+
+/* The small uppercase mono label that titles every field in a title block, a
+ * definition list, or a table head. Used often enough to earn a name. */
+@utility field-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-ink-500);
+}
+
+/* A controlled document number, revision code or reference. Mono and slightly
+ * tracked, so a column of them reads as a column.
+ *
+ * Size is deliberately absent. A utility and a text-* class are both single
+ * class selectors, so whichever Tailwind emits last would win — leaving the
+ * size out means every call site states it and nothing depends on order. */
+@utility doc-code {
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
