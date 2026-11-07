@@ -8,6 +8,7 @@ import { hashPassword } from "@/lib/password";
 import { SYSTEM_ROLE_TEMPLATES } from "@/lib/permissions";
 import {
   generateInvitationToken,
+  hashInvitationToken,
   invitationExpiry,
   invitationUrl,
 } from "@/lib/tokens";
@@ -88,7 +89,7 @@ export async function createOrganizationWithAdmin(
         userId: admin.id,
         email,
         roleId: adminRole.id,
-        token,
+        tokenHash: hashInvitationToken(token),
         expiresAt: invitationExpiry(),
         createdByUserId: null,
       });

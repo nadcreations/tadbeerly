@@ -21,7 +21,12 @@ import {
 } from "@/lib/passwordReset";
 import { PERMISSIONS } from "@/lib/permissions";
 import { revokeUserSessions } from "@/lib/session";
-import { generateInvitationToken, invitationExpiry, invitationUrl } from "@/lib/tokens";
+import {
+  generateInvitationToken,
+  hashInvitationToken,
+  invitationExpiry,
+  invitationUrl,
+} from "@/lib/tokens";
 
 /**
  * Agent administration. Every function takes the acting user, requires
@@ -246,7 +251,7 @@ async function inviterOf(exec: Executor, actor: Actor) {
   return inviter;
 }
 
-/** Writes a pending invitation and its email; returns the token. */
+/** Writes a pending invitation (storing the token's hash) and its email; returns the raw token. */
 async function issueInvitation(
   exec: Executor,
   actor: Actor,
@@ -264,7 +269,7 @@ async function issueInvitation(
     userId: invitee.userId,
     email: invitee.email,
     roleId: invitee.roleId,
-    token,
+    tokenHash: hashInvitationToken(token),
     expiresAt: invitationExpiry(),
     createdByUserId: actor.id,
   });

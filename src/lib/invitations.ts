@@ -7,6 +7,7 @@ import { invitationAcceptedEmail } from "@/lib/email/templates";
 import { fullName } from "@/lib/format";
 import { hashPassword } from "@/lib/password";
 import { validateNewPassword } from "@/lib/passwordReset";
+import { hashInvitationToken } from "@/lib/tokens";
 
 export const INVALID_INVITATION_MESSAGE = "This invitation is invalid or has expired.";
 
@@ -43,7 +44,7 @@ export async function loadInvitation(token: string): Promise<LoadedInvitation | 
     .innerJoin(organizations, eq(organizations.id, invitations.organizationId))
     .where(
       and(
-        eq(invitations.token, token),
+        eq(invitations.tokenHash, hashInvitationToken(token)),
         eq(invitations.status, "pending"),
         sql`${invitations.expiresAt} > now()`,
         eq(users.status, "invited"),
@@ -72,7 +73,7 @@ export async function acceptInvitation(
       .set({ status: "accepted", respondedAt: sql`now()` })
       .where(
         and(
-          eq(invitations.token, token),
+          eq(invitations.tokenHash, hashInvitationToken(token)),
           eq(invitations.status, "pending"),
           sql`${invitations.expiresAt} > now()`,
           sql`exists (

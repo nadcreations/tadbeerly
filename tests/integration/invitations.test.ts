@@ -1,12 +1,15 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import "../setup/nextMocks";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditEvents, invitations, organizations, users } from "@/db/schema";
 import { inviteAgent, withdrawInvitation } from "@/lib/agents";
 import { InvitationError, acceptInvitation, loadInvitation } from "@/lib/invitations";
 import { createOrganizationWithAdmin } from "@/lib/organizations";
 import { PasswordResetError } from "@/lib/passwordReset";
+import { hashInvitationToken } from "@/lib/tokens";
 import { verifyPassword } from "@/lib/password";
 import { setTransportForTests } from "@/lib/email/transport";
 import { acceptInvitationAction } from "@/lib/actions/invitations";
@@ -63,13 +66,13 @@ describe("loadInvitation", () => {
     expect(await loadInvitation("nope")).toBeNull();
 
     const { token, admin } = await invite();
-    await db.update(invitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(invitations.token, token));
+    await db.update(invitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(invitations.tokenHash, hashInvitationToken(token)));
     expect(await loadInvitation(token)).toBeNull();
 
-    await db.update(invitations).set({ expiresAt: new Date(Date.now() + 60_000), status: "revoked" }).where(eq(invitations.token, token));
+    await db.update(invitations).set({ expiresAt: new Date(Date.now() + 60_000), status: "revoked" }).where(eq(invitations.tokenHash, hashInvitationToken(token)));
     expect(await loadInvitation(token)).toBeNull();
 
-    await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.token, token));
+    await db.update(invitations).set({ status: "accepted" }).where(eq(invitations.tokenHash, hashInvitationToken(token)));
     expect(await loadInvitation(token)).toBeNull();
 
     const second = await inviteAgent(actorOf(admin), {
@@ -80,6 +83,24 @@ describe("loadInvitation", () => {
     });
     await withdrawInvitation(actorOf(admin), second.userId);
     expect(await loadInvitation(tokenOf(second.invitationUrl))).toBeNull();
+  });
+
+  test("only a hash of the token is stored, and the raw token still works", async () => {
+    const { userId, token } = await invite();
+    const [row] = await db
+      .select()
+      .from(invitations)
+      .where(eq(invitations.userId, userId));
+    const stored = Object.values(row).filter((v) => typeof v === "string") as string[];
+    expect(stored).not.toContain(token);
+    expect(stored).toContain(createHash("sha256").update(token).digest("hex"));
+
+    expect(await loadInvitation(token)).not.toBeNull();
+    // The stored value is not itself a working link.
+    const hash = createHash("sha256").update(token).digest("hex");
+    expect(await loadInvitation(hash)).toBeNull();
+    await expect(acceptInvitation(hash, "Password123!")).rejects.toThrow(GENERIC);
+    await expect(acceptInvitation(token, "Password123!")).resolves.toMatchObject({ userId });
   });
 
   test("is null while the organization is suspended", async () => {
@@ -99,7 +120,7 @@ describe("acceptInvitation", () => {
     expect(dan.status).toBe("active");
     expect(await verifyPassword("Password123!", dan.passwordHash!)).toBe(true);
 
-    const [inv] = await db.select().from(invitations).where(eq(invitations.token, token));
+    const [inv] = await db.select().from(invitations).where(eq(invitations.tokenHash, hashInvitationToken(token)));
     expect(inv.status).toBe("accepted");
     expect(inv.respondedAt).not.toBeNull();
 
@@ -125,11 +146,11 @@ describe("acceptInvitation", () => {
 
   test("expired and withdrawn invitations are refused", async () => {
     const { token, userId, admin } = await invite();
-    await db.update(invitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(invitations.token, token));
+    await db.update(invitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(invitations.tokenHash, hashInvitationToken(token)));
     await expect(acceptInvitation(token, "Password123!")).rejects.toThrow(GENERIC);
     expect((await userById(userId)).status).toBe("invited");
 
-    await db.update(invitations).set({ expiresAt: new Date(Date.now() + 60_000) }).where(eq(invitations.token, token));
+    await db.update(invitations).set({ expiresAt: new Date(Date.now() + 60_000) }).where(eq(invitations.tokenHash, hashInvitationToken(token)));
     await withdrawInvitation(actorOf(admin), userId);
     await expect(acceptInvitation(token, "Password123!")).rejects.toThrow(GENERIC);
   });
@@ -146,7 +167,7 @@ describe("acceptInvitation", () => {
     const { token, userId } = await invite();
     await db.update(users).set({ status: "disabled" }).where(eq(users.id, userId));
     await expect(acceptInvitation(token, "Password123!")).rejects.toBeInstanceOf(InvitationError);
-    const [inv] = await db.select().from(invitations).where(eq(invitations.token, token));
+    const [inv] = await db.select().from(invitations).where(eq(invitations.tokenHash, hashInvitationToken(token)));
     expect(inv.status).toBe("pending");
   });
 
@@ -162,6 +183,8 @@ describe("acceptInvitation", () => {
       admin: { email: "alice@meridian.example", firstName: "Alice", lastName: "A" },
     });
     const token = tokenOf(created.invitationUrl!);
+    const [row] = await db.select().from(invitations);
+    expect(Object.values(row)).not.toContain(token);
     expect((await loadInvitation(token))?.email).toBe("alice@meridian.example");
     await acceptInvitation(token, "Password123!");
     expect((await userById(created.adminUserId)).status).toBe("active");
@@ -174,6 +197,36 @@ describe("acceptInvitation", () => {
     await db.update(users).set({ status: "disabled" }).where(eq(users.id, admin.id));
     await acceptInvitation(token, "Password123!");
     expect((await notifications()).filter((n) => n.kind === "invitation_accepted")).toEqual([]);
+  });
+});
+
+describe("migration 0002_hash_invitation_tokens", () => {
+  const migration = readFileSync("drizzle/0002_hash_invitation_tokens.sql", "utf8");
+
+  test("hashes tokens stored raw before the change, and only those", async () => {
+    // A row as the old code wrote it: the raw token itself.
+    const legacy = await invite("old@meridian.example");
+    const raw = "Legacy_raw-token-0123456789abcdef";
+    await db
+      .update(invitations)
+      .set({ tokenHash: raw })
+      .where(eq(invitations.userId, legacy.userId));
+    // A row as the new code writes it.
+    const current = await invite("new@meridian.example");
+
+    await db.execute(sql.raw(migration));
+    expect(await loadInvitation(raw)).not.toBeNull();
+    expect(await loadInvitation(current.token)).not.toBeNull();
+
+    // Running it again changes nothing: a hash is never hashed twice.
+    await db.execute(sql.raw(migration));
+    expect(await loadInvitation(raw)).not.toBeNull();
+    expect(await loadInvitation(current.token)).not.toBeNull();
+    const [row] = await db
+      .select()
+      .from(invitations)
+      .where(eq(invitations.userId, legacy.userId));
+    expect(row.tokenHash).toBe(hashInvitationToken(raw));
   });
 });
 

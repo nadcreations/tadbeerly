@@ -197,7 +197,12 @@ export const invitations = pgTable(
     roleId: uuid("role_id").references(() => roles.id, {
       onDelete: "set null",
     }),
-    token: text("token").notNull(),
+    /**
+     * SHA-256 of the invitation token (hashInvitationToken); the raw token is
+     * only ever in the link. The column keeps its original name, `token`,
+     * rather than being renamed by a migration.
+     */
+    tokenHash: text("token").notNull(),
     status: invitationStatus("status").notNull().default("pending"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdByUserId: uuid("created_by_user_id").references(() => users.id, {
@@ -209,7 +214,7 @@ export const invitations = pgTable(
     respondedAt: timestamp("responded_at", { withTimezone: true }),
   },
   (t) => [
-    uniqueIndex("invitations_token_idx").on(t.token),
+    uniqueIndex("invitations_token_idx").on(t.tokenHash),
     index("invitations_email_idx").on(sql`lower(${t.email})`),
     index("invitations_organization_idx").on(t.organizationId),
   ],
@@ -244,9 +249,8 @@ export const sessions = pgTable(
  * lives for 30 days; a reset changes an existing account and is dangerous for
  * exactly as long as it exists, so it is single-use and short-lived.
  *
- * The token is stored hashed, like a session and unlike an invitation token: an
- * invitation link only offers to create an account somebody was already going
- * to be given, whereas a leaked reset link is a working key to an existing one.
+ * The token is stored hashed, like a session's and an invitation's: a copy of
+ * the database must not hold working links.
  */
 // Scoped through users, so no organization_id: reached only by token hash or an already-resolved user id.
 export const passwordResets = pgTable(

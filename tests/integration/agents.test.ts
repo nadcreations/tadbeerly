@@ -32,6 +32,7 @@ import { createSession } from "@/lib/session";
 import { AuthorizationError, ConflictError, NotFoundError } from "@/lib/errors";
 import { createOrganizationWithAdmin } from "@/lib/organizations";
 import { issuePasswordReset } from "@/lib/passwordReset";
+import { hashInvitationToken } from "@/lib/tokens";
 import {
   actorOf,
   adminFixture,
@@ -97,7 +98,10 @@ describe("inviteAgent", () => {
 
     const [inv] = await db.select().from(invitations).where(eq(invitations.userId, r.userId));
     expect(inv).toMatchObject({ status: "pending", createdByUserId: admin.id, organizationId: org.id });
-    expect(r.invitationUrl).toMatch(new RegExp(`/invitations/${inv.token}$`));
+    // The link carries the token; the row holds only its hash.
+    const linkToken = r.invitationUrl.split("/invitations/")[1];
+    expect(inv.tokenHash).toBe(hashInvitationToken(linkToken));
+    expect(inv.tokenHash).not.toBe(linkToken);
     expect(await auditActions()).toEqual(["agent.invited"]);
     // dispatchSoon ran after commit: the invitation went out and the row is marked sent.
     expect(sent.map((m) => m.to)).toEqual(["dan@meridian.example"]);
@@ -572,10 +576,11 @@ describe("invitations: resend and withdraw", () => {
     await resendInvitation(actorOf(admin), userId);
 
     const rows = await db.select().from(invitations).where(eq(invitations.userId, userId));
-    expect(rows.find((r) => r.token === oldToken)?.status).toBe("revoked");
+    const oldHash = hashInvitationToken(oldToken);
+    expect(rows.find((r) => r.tokenHash === oldHash)?.status).toBe("revoked");
     const fresh = rows.filter((r) => r.status === "pending");
     expect(fresh).toHaveLength(1);
-    expect(fresh[0].token).not.toBe(oldToken);
+    expect(fresh[0].tokenHash).not.toBe(oldHash);
     expect((await notifications()).map((n) => n.kind)).toEqual(["user_invitation", "user_invitation"]);
     expect(await auditActions()).toEqual(["agent.invited", "agent.invitation_resent"]);
   });
