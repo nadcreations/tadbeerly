@@ -24,7 +24,7 @@ export default async function AuditPage({
   const user = await requirePagePermission(PERMISSIONS.ADMIN_AUDIT);
   const query = await searchParams;
   const action = query.action ?? "";
-  const actor = query.actor ?? "";
+  const actor = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query.actor ?? "") ? (query.actor ?? "") : "";
   const fromDate = parseDayBound(query.from, "start");
   // The whole of the "to" day is included.
   const toDate = parseDayBound(query.to, "end");

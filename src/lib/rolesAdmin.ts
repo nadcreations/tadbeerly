@@ -50,7 +50,9 @@ export async function createRole(
   if (name.length < 2 || name.length > 60) {
     throw new ConflictError("Role names must be 2 to 60 characters.");
   }
-  const key = `custom_${slug(name)}`;
+  const nameSlug = slug(name);
+  if (!nameSlug) throw new ConflictError("Use at least one letter or number in the role name.");
+  const key = `custom_${nameSlug}`;
   const description = input.description?.trim() || null;
 
   const source = await getRole(actor.organizationId, input.copyFromRoleId);
@@ -109,7 +111,8 @@ export async function updateRolePermissions(
   const next = ALL_PERMISSIONS.filter((p) => wanted.has(p));
   const before = new Set(role.permissions);
   const added = next.filter((p) => !before.has(p));
-  const removed = role.permissions.filter((p) => !next.includes(p as never));
+  const nextSet = new Set<string>(next);
+  const removed = role.permissions.filter((p) => !nextSet.has(p));
 
   await db
     .update(roles)

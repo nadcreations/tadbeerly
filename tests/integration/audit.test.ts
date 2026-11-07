@@ -136,3 +136,12 @@ describe("audit page helpers", () => {
     expect(options.map((o) => o.id)).toEqual([mine.id]);
   });
 });
+
+describe("audit actor filter", () => {
+  test("a non-uuid actor is ignored rather than erroring", async () => {
+    const a = await makeOrg();
+    await recordAudit({ action: "organization.updated", summary: "x", organizationId: a.id });
+    const res = await listAuditEvents(a.id, { actorUserId: "abc" }, 1);
+    expect(res.rows.map((r) => r.summary)).toEqual(["x"]);
+  });
+});

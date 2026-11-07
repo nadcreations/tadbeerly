@@ -151,3 +151,13 @@ describe("createRole", () => {
     ).rejects.toBeInstanceOf(AuthorizationError);
   });
 });
+
+describe("createRole slug", () => {
+  test("a name with no letters or digits is refused", async () => {
+    const { org, admin } = await adminFixture();
+    const sup = await roleOf(org.id, "supervisor");
+    await expect(
+      createRole(actorOf(admin), { name: "!!", copyFromRoleId: sup.id }),
+    ).rejects.toThrow("Use at least one letter or number in the role name.");
+  });
+});

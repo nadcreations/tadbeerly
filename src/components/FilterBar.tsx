@@ -116,30 +116,30 @@ export function FilterBar({
 
       <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
         {searchName ? (
-        <div className="relative min-w-48 flex-1">
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            className="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-ink-400"
-            aria-hidden="true"
-          >
-            <circle cx="7" cy="7" r="4.5" />
-            <path d="m10.5 10.5 3 3" />
-          </svg>
-          <input
-            type="search"
-            name={searchName}
-            defaultValue={searchValue}
-            placeholder={searchPlaceholder}
-            aria-label={searchPlaceholder}
-            className="w-full rounded-md border border-ink-200 bg-white py-1.5 ps-8 pe-3 text-[13px] text-ink-900 transition-colors duration-100 placeholder:text-ink-400 hover:border-ink-300 focus:border-brand-600 focus:outline-none focus:ring-1 focus:ring-brand-600"
-          />
-        </div>
+          <div className="relative min-w-48 flex-1">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              className="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-ink-400"
+              aria-hidden="true"
+            >
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="m10.5 10.5 3 3" />
+            </svg>
+            <input
+              type="search"
+              name={searchName}
+              defaultValue={searchValue}
+              placeholder={searchPlaceholder}
+              aria-label={searchPlaceholder}
+              className="w-full rounded-md border border-ink-200 bg-white py-1.5 ps-8 pe-3 text-[13px] text-ink-900 transition-colors duration-100 placeholder:text-ink-400 hover:border-ink-300 focus:border-brand-600 focus:outline-none focus:ring-1 focus:ring-brand-600"
+            />
+          </div>
         ) : (
           <div className="flex-1" />
         )}

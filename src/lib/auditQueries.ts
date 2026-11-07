@@ -5,6 +5,9 @@ import type { AuditAction } from "@/lib/audit";
 
 const PAGE_SIZE = 100 as const;
 
+/** A malformed actor id is ignored rather than reaching the uuid column. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export type AuditFilters = {
   /** Exact action key. */
   action?: string;
@@ -67,7 +70,9 @@ export async function listAuditEvents(
   const where = and(
     eq(auditEvents.organizationId, organizationId),
     filters.action ? eq(auditEvents.action, filters.action) : undefined,
-    filters.actorUserId ? eq(auditEvents.actorUserId, filters.actorUserId) : undefined,
+    filters.actorUserId && UUID_RE.test(filters.actorUserId)
+      ? eq(auditEvents.actorUserId, filters.actorUserId)
+      : undefined,
     filters.from ? gte(auditEvents.occurredAt, filters.from) : undefined,
     filters.to ? lte(auditEvents.occurredAt, filters.to) : undefined,
   );
@@ -108,6 +113,7 @@ export async function listAuditEvents(
 /**
  * Parses a yyyy-mm-dd query value into a bound on occurredAt. "end" is the last
  * millisecond of that day (UTC), so a `to` filter includes the whole day.
+ * Days are UTC until organizations get a time zone (the SLA milestone).
  * Anything that is not a real calendar date is ignored.
  */
 export function parseDayBound(raw: string | undefined, edge: "start" | "end"): Date | null {
