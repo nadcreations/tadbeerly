@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { emailNotifications } from "@/db/schema";
 import {
@@ -109,5 +109,94 @@ describe("outbox", () => {
       { userId: mine.id, email: mine.email, name: `${mine.firstName} ${mine.lastName}` },
     ]);
     expect(await recipientsByUserIds(org.id, [])).toEqual([]);
+  });
+});
+
+describe("outbox lease", () => {
+  const onlyRow = async () => (await db.select().from(emailNotifications))[0];
+  const setLease = (interval: string) =>
+    db.execute(
+      sql`update email_notifications set claimed_until = now() + ${interval}::interval`,
+    );
+
+  test("a row with a live lease is skipped", async () => {
+    const org = await makeOrg();
+    await enqueue(db, [row(org.id)]);
+    await setLease("5 minutes");
+    const send = vi.fn().mockResolvedValue(undefined);
+    setTransportForTests(fakeTransport(send));
+    expect(await dispatchPending()).toEqual({ sent: 0, failed: 0, deferred: 0 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test("a row with an expired lease is re-claimed and its attempts go up", async () => {
+    const org = await makeOrg();
+    await enqueue(db, [row(org.id)]);
+    await db.execute(
+      sql`update email_notifications set attempts = 1, claimed_until = now() - interval '1 minute'`,
+    );
+    setTransportForTests(fakeTransport(async () => {}));
+    expect(await dispatchPending()).toEqual({ sent: 1, failed: 0, deferred: 0 });
+    const r = await onlyRow();
+    expect(r.attempts).toBe(2);
+    expect(r.status).toBe("sent");
+    expect(r.claimedUntil).toBeNull();
+  });
+
+  test("an exhausted row with an expired lease becomes failed", async () => {
+    const org = await makeOrg();
+    await enqueue(db, [row(org.id)]);
+    await db.execute(
+      sql`update email_notifications set attempts = 5, claimed_until = now() - interval '1 minute'`,
+    );
+    const send = vi.fn().mockResolvedValue(undefined);
+    setTransportForTests(fakeTransport(send));
+    await dispatchPending();
+    const r = await onlyRow();
+    expect(r.status).toBe("failed");
+    expect(r.claimedUntil).toBeNull();
+    expect(r.lastError).toBe("Dispatcher did not finish the final attempt");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test("out of budget gives the attempt back and releases the lease", async () => {
+    const org = await makeOrg();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await enqueue(db, [row(org.id)]);
+    const send = vi.fn().mockResolvedValue(undefined);
+    setTransportForTests(fakeTransport(send));
+    expect(await dispatchPending(50, -1)).toEqual({ sent: 0, failed: 0, deferred: 0 });
+    const r = await onlyRow();
+    expect(r.attempts).toBe(0);
+    expect(r.status).toBe("pending");
+    expect(r.claimedUntil).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test("a failed status write after a successful send is not recorded as a send failure", async () => {
+    const org = await makeOrg();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await enqueue(db, [row(org.id)]);
+    setTransportForTests(
+      fakeTransport(async () => {
+        // The send succeeds, then the status write cannot happen.
+        await db.execute(
+          sql`alter table email_notifications add constraint tmp_never_sent check (status <> 'sent') not valid`,
+        );
+      }),
+    );
+    try {
+      const result = await dispatchPending();
+      expect(result.failed).toBe(0);
+      expect(result.deferred).toBe(0);
+      expect(err).toHaveBeenCalled();
+    } finally {
+      await db.execute(
+        sql`alter table email_notifications drop constraint if exists tmp_never_sent`,
+      );
+    }
+    const r = await onlyRow();
+    expect(r.status).toBe("pending");
+    expect(r.lastError).toBeNull();
   });
 });

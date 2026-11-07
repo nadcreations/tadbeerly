@@ -103,7 +103,7 @@ export function compose(input: Composition): EmailContent {
       }
       ${
         input.quote
-          ? `<div style="margin:0 0 16px;padding:12px 14px;background:#fdf9f2;border-inline-start:3px solid #e7c48d;font-size:14px;line-height:1.5;color:#473f35;white-space:pre-wrap;">${escapeHtml(input.quote)}</div>`
+          ? `<div style="margin:0 0 16px;padding:12px 14px;background:#fdf9f2;border-left:3px solid #e7c48d;font-size:14px;line-height:1.5;color:#473f35;white-space:pre-wrap;">${escapeHtml(input.quote)}</div>`
           : ""
       }
       ${

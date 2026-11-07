@@ -34,5 +34,6 @@ try {
   console.log("code:      ", e.code ?? "(none)");
   console.log("response:  ", (e.response ?? "").toString().slice(0, 400));
   console.log("message:   ", e.message?.slice(0, 400));
+  process.exit(1);
 }
 process.exit(0);

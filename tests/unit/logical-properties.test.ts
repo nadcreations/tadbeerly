@@ -18,7 +18,10 @@ function files(dir: string): string[] {
 const read = (f: string) => readFileSync(f, "utf8");
 
 test("UI uses logical direction utilities only", () => {
-  const offenders = files("src").filter(
+  // Email HTML keeps physical CSS: Outlook ignores logical properties.
+  const offenders = files("src")
+    .filter((f) => !f.replace(/\\/g, "/").startsWith("src/lib/email/"))
+    .filter(
     (f) => PHYSICAL.test(read(f)) || PHYSICAL_CSS.test(read(f)),
   );
   expect(offenders).toEqual([]);

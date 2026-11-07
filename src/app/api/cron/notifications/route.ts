@@ -32,14 +32,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Drain in batches so one call clears a backlog, with a cap so a large
-  // queue cannot hold the request open indefinitely.
+  // Drain in batches so one call clears a backlog. One deadline covers the
+  // whole drain (the caller gives up at 25s), and the batch count is capped too.
+  const deadline = Date.now() + 20_000;
   let sent = 0;
   let failed = 0;
   let deferred = 0;
 
   for (let batch = 0; batch < 10; batch += 1) {
-    const result = await dispatchPending(50);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const result = await dispatchPending(50, remaining);
     sent += result.sent;
     failed += result.failed;
     deferred += result.deferred;

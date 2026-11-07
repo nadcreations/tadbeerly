@@ -60,8 +60,9 @@ export default async function handler(): Promise<Response> {
       /*
        * Generous, and deliberately shorter than the platform's own ceiling.
        * The endpoint drains up to ten batches of fifty, so a large backlog is
-       * slow by design; being cut off by the platform mid-drain would leave
-       * rows claimed with their attempt counter already incremented.
+       * slow by design. The drain keeps to a 20s deadline of its own, and a
+       * dispatcher that is cut off anyway leaves rows leased: they become
+       * claimable again when the five-minute lease expires.
        */
       signal: AbortSignal.timeout(25_000),
     });

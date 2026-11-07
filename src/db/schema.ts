@@ -412,6 +412,8 @@ export const emailNotifications = pgTable(
       .notNull()
       .defaultNow(),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    /** Lease held by the dispatcher that claimed this row; null when unclaimed. */
+    claimedUntil: timestamp("claimed_until", { withTimezone: true }),
   },
   (t) => [
     index("email_notifications_status_idx").on(t.status, t.createdAt),

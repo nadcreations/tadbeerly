@@ -1,0 +1,1 @@
+ALTER TABLE "email_notifications" ADD COLUMN "claimed_until" timestamp with time zone;
