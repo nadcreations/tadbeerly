@@ -1,11 +1,17 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { login } from "@/lib/actions/auth";
 import { homeFor } from "@/lib/authz";
 import { getCurrentUser } from "@/lib/session";
 import { ActionForm, FieldError, SubmitButton } from "@/components/forms";
-import { Card, Input } from "@/components/ui";
+import { Card, FormSuccess, Input } from "@/components/ui";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ reset?: string }>;
+}) {
+  const { reset } = await searchParams;
   const user = await getCurrentUser();
   if (user) redirect(homeFor(user));
 
@@ -15,6 +21,12 @@ export default async function LoginPage() {
       <p className="mt-1 text-[13px] text-ink-500">
         Use the account issued by your organization.
       </p>
+
+      {reset === "1" && (
+        <div className="mt-4">
+          <FormSuccess message="Your password has been changed. Sign in with your new password." />
+        </div>
+      )}
 
       <ActionForm action={login} className="mt-6">
         <div>
@@ -45,6 +57,14 @@ export default async function LoginPage() {
             className="mt-1.5"
           />
           <FieldError name="password" />
+          <p className="mt-1.5 text-[12px]">
+            <Link
+              href="/forgot"
+              className="text-ink-600 underline underline-offset-2 hover:text-ink-900"
+            >
+              Forgot password?
+            </Link>
+          </p>
         </div>
 
         <SubmitButton className="w-full" pendingLabel="Signing in…">
