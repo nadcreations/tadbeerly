@@ -107,20 +107,11 @@ function Icon({ name }: { name: string }) {
 }
 
 /**
- * A tint per module, so the eye finds Mail or Workflows by colour before it
- * reads the label. Each is a light wash behind the icon rather than a filled
- * block — enough to give the rail some life without turning a working tool
- * into a toybox.
- *
- * These used to run across the spectrum — violet, cyan, indigo, emerald — which
- * separated eleven items cleanly and now reads as eleven brands. Warm hues
- * cannot spread that far, so the rail leans on depth as much as hue: the three
- * document modules take the gold itself at increasing strength, the people
- * modules take terracotta and rust, and the administrative ones stay neutral.
- *
- * Worth being honest that this is a trade. Distinguishing Transmittals from
- * Mail by two steps of warmth is harder than distinguishing violet from amber,
- * so the labels carry more of the load than they did.
+ * A tint per icon, so the eye finds an item by colour before it reads the
+ * label. Each is a light wash behind the icon rather than a filled block:
+ * enough life for the rail without turning a working tool into a toybox.
+ * The palette stays within the warm brand hues plus neutrals, so items lean on
+ * depth as much as hue and the labels carry the rest.
  */
 const ICON_TONES: Record<string, { idle: string; active: string }> = {
   dashboard: { idle: "bg-brand-50 text-brand-600", active: "bg-brand-100 text-brand-700" },

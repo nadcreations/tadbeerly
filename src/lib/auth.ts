@@ -10,12 +10,20 @@ export const LOGIN_WINDOW_SECONDS = 15 * 60;
 
 export type AuthResult =
   | { status: "ok"; user: { id: string; organizationId: string; mfaEnabled: boolean } }
-  | { status: "invalid" }
+  | { status: "invalid"; account?: { id: string; organizationId: string } }
   | { status: "locked" };
 
 /** Verified when there is no usable account, so the scrypt cost is always paid. */
 let dummyHash: Promise<string> | undefined;
-const getDummyHash = () => (dummyHash ??= hashPassword("tadbeerly-dummy-password"));
+function getDummyHash(): Promise<string> {
+  dummyHash ??= hashPassword("tadbeerly-dummy-password").catch((error) => {
+    dummyHash = undefined; // never cache a rejection
+    throw error;
+  });
+  return dummyHash;
+}
+// Computed eagerly so the first unknown-email request does not pay for it.
+void getDummyHash().catch(() => {});
 
 /**
  * Checks an email and password. Only failures are counted against the email
@@ -51,7 +59,10 @@ export async function authenticate(email: string, password: string): Promise<Aut
 
   if (!usable || !passwordOk) {
     await hitRateLimit(key, LOGIN_FAILURE_LIMIT, LOGIN_WINDOW_SECONDS);
-    return { status: "invalid" };
+    // `account` is for the caller's audit only; it must never reach the client.
+    return account
+      ? { status: "invalid", account: { id: account.id, organizationId: account.organizationId } }
+      : { status: "invalid" };
   }
 
   await clearRateLimit(key);

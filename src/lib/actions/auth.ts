@@ -1,8 +1,9 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { z } from "zod";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { authenticate } from "@/lib/auth";
@@ -34,27 +35,29 @@ export async function login(_prev: ActionState, formData: FormData): Promise<Act
   }
 
   if (result.status === "invalid") {
-    // Audit rows need an organization, so an unknown email is not recorded.
-    const [account] = await db
-      .select({ id: users.id, organizationId: users.organizationId })
-      .from(users)
-      .where(sql`lower(${users.email}) = ${normaliseEmail(email)}`)
-      .limit(1);
+    // Audit rows need an organization, so an unknown email is not recorded. The
+    // write runs after the response so a real account costs no extra time.
+    const { account } = result;
     if (account) {
-      await recordAudit({
-        action: "auth.login_failed",
-        summary: `Failed sign-in attempt for ${normaliseEmail(email)}`,
-        organizationId: account.organizationId,
-        actorUserId: account.id,
-        entityType: "user",
-        entityId: account.id,
-      });
+      after(() =>
+        recordAudit({
+          action: "auth.login_failed",
+          summary: `Failed sign-in attempt for ${normaliseEmail(email)}`,
+          organizationId: account.organizationId,
+          actorUserId: account.id,
+          entityType: "user",
+          entityId: account.id,
+        }),
+      );
     }
     return { error: "Email or password is incorrect." };
   }
 
   const { user } = result;
   // MFA challenge branch: added in Task 10, before the session is created.
+
+  // Session first: if it fails, nothing claims the user signed in.
+  await createSession(user.id);
 
   const [row] = await db
     .update(users)
@@ -70,8 +73,6 @@ export async function login(_prev: ActionState, formData: FormData): Promise<Act
     entityType: "user",
     entityId: user.id,
   });
-
-  await createSession(user.id);
   redirect(homeFor(row));
 }
 

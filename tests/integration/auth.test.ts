@@ -15,7 +15,19 @@ vi.mock("next/navigation", () => ({
   },
 }));
 
+// after() needs a request scope; run the callback and let tests await it.
+const afterTasks: Promise<unknown>[] = [];
+vi.mock("next/server", () => ({
+  after: (task: () => unknown) => {
+    afterTasks.push(Promise.resolve().then(task));
+  },
+}));
+const flushAfter = async () => {
+  await Promise.all(afterTasks.splice(0));
+};
+
 beforeEach(async () => {
+  afterTasks.length = 0;
   await resetDb();
   clearCookies();
 });
@@ -41,16 +53,33 @@ describe("authenticate", () => {
   test("unknown email and wrong password look identical", async () => {
     const org = await makeOrg();
     await makeAgent(org.id, "agent", { email: "a@m.example" });
+    const unknown = await authenticate("nobody@m.example", "x");
+    const wrong = await authenticate("a@m.example", "x");
+    expect(unknown.status).toBe("invalid");
+    expect(wrong.status).toBe("invalid");
+  });
+
+  test("invalid carries the account identity only when the email matched a user", async () => {
+    const org = await makeOrg();
+    const u = await makeAgent(org.id, "agent", { email: "a@m.example" });
+    const d = await makeAgent(org.id, "agent", { email: "d@m.example", status: "disabled" });
+    expect(await authenticate("a@m.example", "x")).toEqual({
+      status: "invalid",
+      account: { id: u.id, organizationId: org.id },
+    });
+    expect(await authenticate("d@m.example", "Password123!")).toEqual({
+      status: "invalid",
+      account: { id: d.id, organizationId: org.id },
+    });
     expect(await authenticate("nobody@m.example", "x")).toEqual({ status: "invalid" });
-    expect(await authenticate("a@m.example", "x")).toEqual({ status: "invalid" });
   });
 
   test("disabled, invited and suspended-organization accounts are invalid", async () => {
     const org = await makeOrg();
     await makeAgent(org.id, "agent", { email: "d@m.example", status: "disabled" });
     await makeAgent(org.id, "agent", { email: "i@m.example", status: "invited" });
-    expect(await authenticate("d@m.example", "Password123!")).toEqual({ status: "invalid" });
-    expect(await authenticate("i@m.example", "Password123!")).toEqual({ status: "invalid" });
+    expect((await authenticate("d@m.example", "Password123!")).status).toBe("invalid");
+    expect((await authenticate("i@m.example", "Password123!")).status).toBe("invalid");
 
     const org2 = await makeOrg();
     await makeAgent(org2.id, "agent", { email: "s@m.example" });
@@ -58,14 +87,14 @@ describe("authenticate", () => {
       .update(organizations)
       .set({ status: "suspended" })
       .where(eq(organizations.id, org2.id));
-    expect(await authenticate("s@m.example", "Password123!")).toEqual({ status: "invalid" });
+    expect((await authenticate("s@m.example", "Password123!")).status).toBe("invalid");
   });
 
   test("eleventh failure inside 15 minutes is locked, even with the right password", async () => {
     const org = await makeOrg();
     await makeAgent(org.id, "agent", { email: "a@m.example" });
     for (let i = 0; i < 10; i++) {
-      expect(await authenticate("a@m.example", "wrong")).toEqual({ status: "invalid" });
+      expect((await authenticate("a@m.example", "wrong")).status).toBe("invalid");
     }
     expect(await authenticate("a@m.example", "Password123!")).toEqual({ status: "locked" });
   });
@@ -117,7 +146,9 @@ describe("login action", () => {
     const org = await makeOrg();
     const u = await makeAgent(org.id, "agent", { email: "a@m.example" });
     const state = await login({}, form("a@m.example", "hunter2-secret"));
-    expect(state.error).toBe("Email or password is incorrect.");
+    expect(state).toEqual({ error: "Email or password is incorrect." });
+    expect(await count(auditEvents)).toBe(0); // audit is deferred off the response path
+    await flushAfter();
     const events = await db
       .select()
       .from(auditEvents)
@@ -131,6 +162,7 @@ describe("login action", () => {
 
   test("failure for an unknown email gives the same message and no audit row", async () => {
     const state = await login({}, form("nobody@m.example", "x"));
+    await flushAfter();
     expect(state.error).toBe("Email or password is incorrect.");
     expect(await count(auditEvents)).toBe(0);
   });
