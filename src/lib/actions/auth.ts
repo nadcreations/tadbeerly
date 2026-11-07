@@ -3,14 +3,12 @@
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { users } from "@/db/schema";
 import { authenticate } from "@/lib/auth";
-import { homeFor } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 import { fullName, normaliseEmail } from "@/lib/format";
-import { createSession, destroySession, getCurrentUser } from "@/lib/session";
+import { createChallenge } from "@/lib/mfa";
+import { completeSignIn } from "@/lib/signIn";
+import { destroySession, getCurrentUser } from "@/lib/session";
 import { fieldErrorsFrom, type ActionState } from "./types";
 
 const loginSchema = z.object({
@@ -54,26 +52,13 @@ export async function login(_prev: ActionState, formData: FormData): Promise<Act
   }
 
   const { user } = result;
-  // MFA challenge branch: added in Task 10, before the session is created.
+  if (user.mfaEnabled) {
+    // Second factor first: no session exists until the code is verified.
+    await createChallenge(user.id);
+    redirect("/login/verify");
+  }
 
-  // Session first: if it fails, nothing claims the user signed in.
-  await createSession(user.id);
-
-  const [row] = await db
-    .update(users)
-    .set({ lastLoginAt: new Date() })
-    .where(eq(users.id, user.id))
-    .returning({ firstName: users.firstName, lastName: users.lastName, kind: users.kind });
-
-  await recordAudit({
-    action: "auth.login",
-    summary: `${fullName(row)} signed in`,
-    organizationId: user.organizationId,
-    actorUserId: user.id,
-    entityType: "user",
-    entityId: user.id,
-  });
-  redirect(homeFor(row));
+  return completeSignIn(user);
 }
 
 export async function logout(): Promise<void> {

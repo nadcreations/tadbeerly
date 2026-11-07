@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { mfaGateRedirect } from "@/lib/mfa";
 import { PERMISSIONS } from "@/lib/permissions";
 import { can, requireAgent } from "@/lib/authz";
 import { logout } from "@/lib/actions/auth";
@@ -15,7 +18,11 @@ const ADMIN_PERMISSIONS = [
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireAgent();
 
-  // MFA gate: added in Task 10
+  // Unenrolled users who must use MFA (organization policy, or the locked
+  // Administrator role) can reach only the security page until they enrol.
+  const pathname = (await headers()).get("x-tb-pathname") ?? "";
+  const gate = mfaGateRedirect(user, pathname);
+  if (gate) redirect(gate);
 
   const links: NavLink[] = [{ href: "/tickets", label: "Tickets" }];
   if (ADMIN_PERMISSIONS.some((p) => can(user, p))) {
