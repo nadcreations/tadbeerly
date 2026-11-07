@@ -32,6 +32,7 @@ const LABELS: Record<AuditAction, string> = {
   "auth.login": "Signed in",
   "auth.login_failed": "Sign-in failed",
   "auth.logout": "Signed out",
+  "auth.mfa_enrolment_started": "Two-factor enrolment started",
   "auth.mfa_enrolled": "MFA enrolled",
   "auth.mfa_disabled": "MFA disabled",
   "auth.mfa_reset": "MFA reset",

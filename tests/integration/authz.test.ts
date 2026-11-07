@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { clearCookies } from "../setup/nextMocks";
+import { clearCookies, setHeaders } from "../setup/nextMocks";
+import { db } from "@/db";
+import { organizations } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { createSession } from "@/lib/session";
 import {
   assertCan,
@@ -21,6 +24,40 @@ const redirectTo = (path: string) => ({
 beforeEach(async () => {
   await resetDb();
   clearCookies();
+  setHeaders({});
+});
+
+describe("MFA gate in requireAgent", () => {
+  test("an unenrolled Administrator is redirected to /security, wherever they go", async () => {
+    const org = await makeOrg();
+    const admin = await makeAgent(org.id, "administrator");
+    await createSession(admin.id);
+    setHeaders({ "x-tb-pathname": "/tickets" });
+    await expect(requireAgent()).rejects.toMatchObject(redirectTo("/security"));
+    await expect(requirePermission("admin.users")).rejects.toMatchObject(redirectTo("/security"));
+    await expect(requirePagePermission("admin.users")).rejects.toMatchObject(redirectTo("/security"));
+    // requireUser (used by the security page and the MFA actions) stays reachable.
+    expect((await requireUser()).id).toBe(admin.id);
+  });
+
+  test("an enrolled Administrator is not redirected", async () => {
+    const org = await makeOrg();
+    const admin = await makeAgent(org.id, "administrator", { mfaEnabled: true });
+    await createSession(admin.id);
+    setHeaders({ "x-tb-pathname": "/tickets" });
+    expect((await requireAgent()).id).toBe(admin.id);
+    expect((await requirePermission("admin.users")).id).toBe(admin.id);
+  });
+
+  test("an unenrolled user under an MFA-requiring organization is gated too", async () => {
+    const org = await makeOrg();
+    const agent = await makeAgent(org.id, "agent");
+    await createSession(agent.id);
+    setHeaders({ "x-tb-pathname": "/tickets" });
+    expect((await requireAgent()).id).toBe(agent.id);
+    await db.update(organizations).set({ requireMfa: true }).where(eq(organizations.id, org.id));
+    await expect(requireAgent()).rejects.toMatchObject(redirectTo("/security"));
+  });
 });
 
 describe("authz", () => {
@@ -52,7 +89,7 @@ describe("authz", () => {
 
   test("requirePermission passes for an administrator", async () => {
     const org = await makeOrg();
-    const u = await makeAgent(org.id, "administrator");
+    const u = await makeAgent(org.id, "administrator", { mfaEnabled: true });
     await createSession(u.id);
     expect((await requirePermission("admin.users")).id).toBe(u.id);
   });
@@ -75,7 +112,7 @@ describe("authz", () => {
 
   test("requirePagePermission returns the user with the key", async () => {
     const org = await makeOrg();
-    const u = await makeAgent(org.id, "administrator");
+    const u = await makeAgent(org.id, "administrator", { mfaEnabled: true });
     await createSession(u.id);
     expect((await requirePagePermission("admin.users")).id).toBe(u.id);
   });

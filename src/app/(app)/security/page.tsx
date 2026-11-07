@@ -126,9 +126,25 @@ export default async function SecurityPage() {
                     Switch off two-step verification
                   </h3>
                   <p className="mt-0.5 mb-3 text-[13px] text-ink-500">
-                    Your account will be protected by password alone.
+                    Your account will be protected by password alone. You will need your password and a current code.
                   </p>
                   <ActionForm action={disableMfa}>
+                    <div>
+                      <label
+                        htmlFor="disable-code"
+                        className="block text-[13px] font-medium text-ink-800"
+                      >
+                        Code from your app, or a recovery code
+                      </label>
+                      <Input
+                        id="disable-code"
+                        name="code"
+                        autoComplete="one-time-code"
+                        required
+                        className="mt-1.5 max-w-sm font-mono"
+                      />
+                      <FieldError name="code" />
+                    </div>
                     <div>
                       <label
                         htmlFor="password"

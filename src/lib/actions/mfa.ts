@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users, organizations, mfaRecoveryCodes } from "@/db/schema";
 import { requireUser } from "@/lib/authz";
@@ -21,8 +21,13 @@ import {
 import {
   getChallenge,
   clearChallenge,
-  recordFailedAttempt,
   verifyMfaCode,
+  reserveAttempt,
+  spendRecoveryCode,
+  isMfaLockedOut,
+  recordMfaFailure,
+  clearMfaFailures,
+  TOO_MANY_MFA_FAILURES,
   MAX_ATTEMPTS,
 } from "@/lib/mfa";
 import { completeSignIn } from "@/lib/signIn";
@@ -55,6 +60,15 @@ export async function beginMfaEnrolment(
     .update(users)
     .set({ mfaSecret: encryptSecret(generateSecret()), updatedAt: new Date() })
     .where(eq(users.id, user.id));
+
+  await recordAudit({
+    action: "auth.mfa_enrolment_started",
+    summary: `${fullName(user)} started two-step verification enrolment`,
+    organizationId: user.organizationId,
+    actorUserId: user.id,
+    entityType: "user",
+    entityId: user.id,
+  });
 
   revalidatePath("/security");
   return { success: "Scan the code below, then enter a code to finish." };
@@ -118,8 +132,9 @@ export async function confirmMfaEnrolment(
 
   const codes = generateRecoveryCodes();
 
-  await db.transaction(async (tx) => {
-    await tx
+  const enabled = await db.transaction(async (tx) => {
+    // Conditional, so a double submit enables once and the loser touches nothing.
+    const flipped = await tx
       .update(users)
       .set({
         mfaEnabled: true,
@@ -127,13 +142,17 @@ export async function confirmMfaEnrolment(
         mfaLastUsedStep: result.step,
         updatedAt: new Date(),
       })
-      .where(eq(users.id, user.id));
+      .where(and(eq(users.id, user.id), eq(users.mfaEnabled, false)))
+      .returning({ id: users.id });
+    if (flipped.length === 0) return false;
 
     await tx.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, user.id));
     await tx.insert(mfaRecoveryCodes).values(
-      codes.map((code) => ({ userId: user.id, codeHash: hashRecoveryCode(code) })),
+      codes.map((code) => ({ userId: user.id, codeHash: hashRecoveryCode(user.id, code) })),
     );
+    return true;
   });
+  if (!enabled) return { error: "Two-step verification is already switched on." };
 
   await recordAudit({
     action: "auth.mfa_enrolled",
@@ -144,22 +163,37 @@ export async function confirmMfaEnrolment(
     entityId: user.id,
   });
 
-  revalidatePath("/security");
+  // No revalidatePath here: the refreshed page would switch branch and unmount
+  // the form holding the only copy of the codes. The client refreshes once the
+  // user confirms they have saved them.
   // The plaintext codes ride back in the action result: this is the only
   // moment they exist outside the user's hands.
   return { success: `enrolled:${codes.join(",")}` };
 }
 
-const passwordSchema = z.object({
+const disableSchema = z.object({
   password: z.string().min(1, "Enter your password."),
+  code: z.string().trim().min(1, "Enter a code from your app or a recovery code."),
 });
 
+/** A TOTP code is six digits; a recovery code is anything else (10 characters). */
+const looksLikeTotp = (raw: string) => /^\d{6}$/.test(raw.replace(/\s/g, ""));
+
+/**
+ * Switching MFA off needs the password AND a current second factor (a TOTP code
+ * or an unused recovery code): a hijacked session alone must not be able to
+ * strip the account's second factor. Failures count against the same per-user
+ * limiter as sign-in, so this is not a free guessing oracle either.
+ */
 export async function disableMfa(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
   const user = await requireUser();
-  const parsed = passwordSchema.safeParse({ password: formData.get("password") });
+  const parsed = disableSchema.safeParse({
+    password: formData.get("password"),
+    code: formData.get("code"),
+  });
   if (!parsed.success) {
     return { fieldErrors: fieldErrorsFrom(parsed.error.flatten().fieldErrors) };
   }
@@ -167,6 +201,7 @@ export async function disableMfa(
   const rows = await db
     .select({
       passwordHash: users.passwordHash,
+      mfaEnabled: users.mfaEnabled,
       requireMfa: organizations.requireMfa,
     })
     .from(users)
@@ -176,6 +211,7 @@ export async function disableMfa(
 
   const record = rows[0];
   if (!record) return { error: "Account not found." };
+  if (!record.mfaEnabled) return { error: "Two-step verification is not switched on." };
 
   // Policy beats preference: when the organization mandates MFA, or the user
   // is an Administrator, an individual cannot opt out of it.
@@ -187,8 +223,20 @@ export async function disableMfa(
     };
   }
 
+  if (await isMfaLockedOut(user.id)) return { error: TOO_MANY_MFA_FAILURES };
+
   if (!(await verifyPassword(parsed.data.password, record.passwordHash))) {
+    await recordMfaFailure(user.id);
     return { fieldErrors: { password: ["That password is not correct."] } };
+  }
+
+  const raw = parsed.data.code;
+  const factorOk = looksLikeTotp(raw)
+    ? (await verifyMfaCode(user.id, raw)) === "ok"
+    : await spendRecoveryCode(user.id, raw);
+  if (!factorOk) {
+    await recordMfaFailure(user.id);
+    return { fieldErrors: { code: ["That code was not accepted."] } };
   }
 
   await db.transaction(async (tx) => {
@@ -205,6 +253,7 @@ export async function disableMfa(
 
     await tx.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, user.id));
   });
+  await clearMfaFailures(user.id);
 
   await recordAudit({
     action: "auth.mfa_disabled",
@@ -239,8 +288,11 @@ export async function regenerateRecoveryCodes(
     return { error: "Two-step verification is not switched on." };
   }
 
+  if (await isMfaLockedOut(user.id)) return { error: TOO_MANY_MFA_FAILURES };
+
   const verdict = await verifyMfaCode(user.id, parsed.data.code);
   if (verdict !== "ok") {
+    await recordMfaFailure(user.id);
     return {
       fieldErrors: {
         code: [
@@ -257,7 +309,7 @@ export async function regenerateRecoveryCodes(
   await db.transaction(async (tx) => {
     await tx.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, user.id));
     await tx.insert(mfaRecoveryCodes).values(
-      codes.map((code) => ({ userId: user.id, codeHash: hashRecoveryCode(code) })),
+      codes.map((code) => ({ userId: user.id, codeHash: hashRecoveryCode(user.id, code) })),
     );
   });
 
@@ -270,7 +322,7 @@ export async function regenerateRecoveryCodes(
     entityId: user.id,
   });
 
-  revalidatePath("/security");
+  // No revalidatePath: the codes must stay on screen until acknowledged.
   return { success: `enrolled:${codes.join(",")}` };
 }
 
@@ -296,45 +348,29 @@ export async function verifyMfaChallenge(
   const raw = String(formData.get("code") ?? "").trim();
   if (!raw) return { fieldErrors: { code: ["Enter a code."] } };
 
-  // A recovery code is anything that is not six digits: they are 10
-  // characters, so the two can never be confused.
-  const looksLikeTotp = /^\d{6}$/.test(raw.replace(/\s/g, ""));
-  let accepted = false;
+  // Per-user ceiling first, across every challenge: nothing is evaluated once
+  // it is hit, however many fresh challenges the password step opens.
+  if (await isMfaLockedOut(challenge.userId)) return { error: TOO_MANY_MFA_FAILURES };
 
-  if (looksLikeTotp) {
-    accepted = (await verifyMfaCode(challenge.userId, raw)) === "ok";
-  } else {
-    const matches = await db
-      .select({ id: mfaRecoveryCodes.id })
-      .from(mfaRecoveryCodes)
-      .where(
-        and(
-          eq(mfaRecoveryCodes.userId, challenge.userId),
-          eq(mfaRecoveryCodes.codeHash, hashRecoveryCode(raw)),
-          isNull(mfaRecoveryCodes.usedAt),
-        ),
-      )
-      .limit(1);
-
-    if (matches[0]) {
-      // Spent atomically before the session exists, so a parallel request
-      // carrying the same code cannot also succeed.
-      const spent = await db
-        .update(mfaRecoveryCodes)
-        .set({ usedAt: new Date() })
-        .where(and(eq(mfaRecoveryCodes.id, matches[0].id), isNull(mfaRecoveryCodes.usedAt)))
-        .returning({ id: mfaRecoveryCodes.id });
-      accepted = spent.length > 0;
-    }
+  // Take the attempt atomically before evaluating, so parallel requests cannot
+  // all be checked against the same remaining attempt.
+  const attempt = await reserveAttempt(challenge.challengeId);
+  if (attempt === null) {
+    await clearChallenge(challenge.challengeId);
+    return { error: "Too many attempts. Sign in again." };
   }
 
+  const accepted = looksLikeTotp(raw)
+    ? (await verifyMfaCode(challenge.userId, raw)) === "ok"
+    : await spendRecoveryCode(challenge.userId, raw);
+
   if (!accepted) {
-    const attempts = await recordFailedAttempt(challenge.challengeId);
-    if (attempts >= MAX_ATTEMPTS) {
+    await recordMfaFailure(challenge.userId);
+    if (attempt >= MAX_ATTEMPTS) {
       await clearChallenge(challenge.challengeId);
       return { error: "Too many attempts. Sign in again." };
     }
-    const left = MAX_ATTEMPTS - attempts;
+    const left = MAX_ATTEMPTS - attempt;
     return {
       fieldErrors: {
         code: [`That code was not accepted. ${left} attempt${left === 1 ? "" : "s"} left.`],
@@ -342,6 +378,7 @@ export async function verifyMfaChallenge(
     };
   }
 
+  await clearMfaFailures(challenge.userId);
   await clearChallenge(challenge.challengeId);
   await completeSignIn(
     { id: challenge.userId, organizationId: challenge.organizationId },

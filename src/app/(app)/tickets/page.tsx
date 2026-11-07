@@ -1,6 +1,9 @@
+import { requireAgent } from "@/lib/authz";
 import { Card, EmptyState, TitleBlock } from "@/components/ui";
 
-export default function TicketsPage() {
+export default async function TicketsPage() {
+  // Layouts are skipped on client navigation, so every page checks for itself.
+  await requireAgent();
   return (
     <>
       <TitleBlock title="Tickets" />

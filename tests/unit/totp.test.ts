@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import {
   codeForStep,
@@ -43,7 +44,13 @@ describe("totp", () => {
     expect(url).toContain("issuer=Tadbeerly");
   });
 
-  test("recovery codes hash the same however they are typed", () => {
-    expect(hashRecoveryCode("abcde-fghij")).toBe(hashRecoveryCode("ABCDEFGHIJ"));
+  test("recovery codes hash the same however they are typed, but per user", () => {
+    expect(hashRecoveryCode("u1", "abcde-fghij")).toBe(hashRecoveryCode("u1", "ABCDEFGHIJ"));
+    expect(hashRecoveryCode("u1", "ABCDEFGHIJ")).not.toBe(hashRecoveryCode("u2", "ABCDEFGHIJ"));
+    expect(hashRecoveryCode("u1", "AAAAAAAAAA")).not.toBe(hashRecoveryCode("u1", "BBBBBBBBBB"));
+    // Keyed, not a bare SHA-256 of the code.
+    expect(hashRecoveryCode("u1", "ABCDEFGHIJ")).not.toBe(
+      createHash("sha256").update("ABCDEFGHIJ").digest("hex"),
+    );
   });
 });

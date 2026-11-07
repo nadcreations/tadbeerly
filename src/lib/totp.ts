@@ -1,7 +1,6 @@
 import {
   createCipheriv,
   createDecipheriv,
-  createHash,
   createHmac,
   randomBytes,
   scryptSync,
@@ -153,7 +152,15 @@ export function formatSecretForDisplay(secret: string): string {
  * Encryption at rest
  * ------------------------------------------------------------------------ */
 
-function encryptionKey(): Buffer {
+const derivedKeys = new Map<string, Buffer>();
+
+/**
+ * Derives a purpose-specific key from the MFA key material. scrypt is slow on
+ * purpose, so each (salt, material) result is memoised rather than recomputed
+ * on every call. Fixed salts: keys must be identical on every boot, and the
+ * material itself is the secret.
+ */
+function deriveKey(salt: string): Buffer {
   const material =
     process.env.MFA_ENCRYPTION_KEY || process.env.SESSION_SECRET || "";
   if (!material) {
@@ -161,10 +168,16 @@ function encryptionKey(): Buffer {
       "MFA requires MFA_ENCRYPTION_KEY (or SESSION_SECRET) to be set.",
     );
   }
-  // Fixed salt: the key must be derivable identically on every boot, and the
-  // material itself is the secret.
-  return scryptSync(material, "tadbeerly.mfa.v1", 32);
+  const id = `${salt}\0${material}`;
+  let key = derivedKeys.get(id);
+  if (!key) {
+    key = scryptSync(material, salt, 32);
+    derivedKeys.set(id, key);
+  }
+  return key;
 }
+
+const encryptionKey = () => deriveKey("tadbeerly.mfa.v1");
 
 /**
  * TOTP secrets are stored encrypted.
@@ -232,15 +245,18 @@ export function generateRecoveryCodes(count = RECOVERY_CODE_COUNT): string[] {
 }
 
 /**
- * Recovery codes are hashed with SHA-256, not scrypt.
+ * Recovery codes are stored as HMAC-SHA256 under a key derived from the MFA key
+ * material, over `userId:code`.
  *
- * A slow KDF protects low-entropy secrets people choose; these are 50 bits of
- * machine-generated randomness, so brute force is infeasible regardless, and a
- * fast hash keeps login from doing ten scrypt passes to find a match.
+ * They carry only about 50 bits of randomness, so a plain or unsalted hash of
+ * one would be crackable offline from a database leak, and one guess would be
+ * testable against every user's codes at once. The key means a leak of the
+ * table alone is not enough, and binding the user id makes each user's hashes
+ * independent. HMAC stays fast, so sign-in does one hash, not a KDF pass.
  */
-export function hashRecoveryCode(code: string): string {
-  return createHash("sha256")
-    .update(normaliseRecoveryCode(code))
+export function hashRecoveryCode(userId: string, code: string): string {
+  return createHmac("sha256", deriveKey("tadbeerly.recovery.v1"))
+    .update(`${userId}:${normaliseRecoveryCode(code)}`)
     .digest("hex");
 }
 

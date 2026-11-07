@@ -1,4 +1,6 @@
+import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
+import { mfaGateRedirect } from "@/lib/mfa";
 import { getCurrentUser, type SessionUser } from "@/lib/session";
 import { hasPermission, type Permission } from "@/lib/permissions";
 import { AuthorizationError } from "@/lib/errors";
@@ -27,10 +29,19 @@ export async function requireUser(): Promise<SessionUser> {
   return user;
 }
 
-/** Agents only; requesters are sent to their portal. */
+/**
+ * Agents only; requesters are sent to their portal. This is also where the MFA
+ * gate is enforced: a layout is not re-rendered on client navigation and server
+ * actions run before any layout, so the check has to live with the data access.
+ * The security page and the MFA actions use requireUser and stay reachable.
+ * A missing pathname header fails closed (the gate then applies).
+ */
 export async function requireAgent(): Promise<SessionUser> {
   const user = await requireUser();
   if (user.kind !== "agent") redirect("/portal");
+  const pathname = (await headers()).get("x-tb-pathname") ?? "";
+  const gate = mfaGateRedirect(user, pathname);
+  if (gate) redirect(gate);
   return user;
 }
 

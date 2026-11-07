@@ -7,6 +7,7 @@ export const AUDIT_ACTIONS = [
   "auth.login",
   "auth.login_failed",
   "auth.logout",
+  "auth.mfa_enrolment_started",
   "auth.mfa_enrolled",
   "auth.mfa_disabled",
   "auth.mfa_reset",

@@ -4,7 +4,8 @@ import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { mfaChallenges, mfaRecoveryCodes, users, organizations } from "@/db/schema";
 import type { SessionUser } from "@/lib/session";
-import { decryptSecret, otpauthUrl, verifyTotp } from "@/lib/totp";
+import { clearRateLimit, hitRateLimit, isRateLimited } from "@/lib/rateLimit";
+import { decryptSecret, hashRecoveryCode, otpauthUrl, verifyTotp } from "@/lib/totp";
 
 export const MFA_COOKIE = "tb_mfa";
 
@@ -111,6 +112,60 @@ export async function recordFailedAttempt(challengeId: string): Promise<number> 
     .returning({ attempts: mfaChallenges.attempts });
 
   return rows[0]?.attempts ?? MAX_ATTEMPTS;
+}
+
+/**
+ * Atomically takes one attempt on a challenge before any code is evaluated, so
+ * parallel requests cannot all be checked against a single remaining attempt.
+ * Returns the attempt number taken, or null when the challenge is spent or
+ * expired and nothing may be evaluated.
+ */
+export async function reserveAttempt(challengeId: string): Promise<number | null> {
+  const rows = await db
+    .update(mfaChallenges)
+    .set({ attempts: sql`${mfaChallenges.attempts} + 1` })
+    .where(
+      and(
+        eq(mfaChallenges.id, challengeId),
+        sql`${mfaChallenges.attempts} < ${MAX_ATTEMPTS}`,
+        sql`${mfaChallenges.expiresAt} > now()`,
+      ),
+    )
+    .returning({ attempts: mfaChallenges.attempts });
+  return rows[0]?.attempts ?? null;
+}
+
+/**
+ * Failed second-factor attempts per user, across every challenge. A correct
+ * password does not reset it (that would let anyone who knows the password
+ * start a fresh challenge and keep guessing); only a successful second factor
+ * does.
+ */
+const USER_FAILURE_LIMIT = 10;
+const USER_FAILURE_WINDOW_SECONDS = 15 * 60;
+const userKey = (userId: string) => `mfa:${userId}`;
+export const TOO_MANY_MFA_FAILURES = "Too many attempts. Try again in 15 minutes.";
+
+export const isMfaLockedOut = (userId: string) =>
+  isRateLimited(userKey(userId), USER_FAILURE_LIMIT, USER_FAILURE_WINDOW_SECONDS);
+export const recordMfaFailure = (userId: string) =>
+  hitRateLimit(userKey(userId), USER_FAILURE_LIMIT, USER_FAILURE_WINDOW_SECONDS);
+export const clearMfaFailures = (userId: string) => clearRateLimit(userKey(userId));
+
+/** Spends an unused recovery code in one statement; true if this call won it. */
+export async function spendRecoveryCode(userId: string, code: string): Promise<boolean> {
+  const rows = await db
+    .update(mfaRecoveryCodes)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(mfaRecoveryCodes.userId, userId),
+        eq(mfaRecoveryCodes.codeHash, hashRecoveryCode(userId, code)),
+        isNull(mfaRecoveryCodes.usedAt),
+      ),
+    )
+    .returning({ id: mfaRecoveryCodes.id });
+  return rows.length > 0;
 }
 
 export async function clearChallenge(challengeId?: string): Promise<void> {

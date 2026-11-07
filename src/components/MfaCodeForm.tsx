@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { useRouter } from "next/navigation";
 import { Button, FormError, FormSuccess, Input } from "./ui";
 import { RecoveryCodes } from "./RecoveryCodes";
 import { useFormStatus } from "react-dom";
@@ -36,6 +37,7 @@ export function MfaCodeForm({
   hint?: string;
 }) {
   const [state, formAction] = useActionState<ActionState, FormData>(action, {});
+  const router = useRouter();
 
   const codes =
     state.success?.startsWith("enrolled:")
@@ -43,7 +45,16 @@ export function MfaCodeForm({
       : null;
 
   if (codes) {
-    return <RecoveryCodes codes={codes} />;
+    // The server action deliberately does not revalidate: a refresh would swap
+    // this form out and lose the codes. Refresh only once they are saved.
+    return (
+      <div className="space-y-3">
+        <RecoveryCodes codes={codes} />
+        <Button type="button" onClick={() => router.refresh()}>
+          I have saved these codes
+        </Button>
+      </div>
+    );
   }
 
   return (
