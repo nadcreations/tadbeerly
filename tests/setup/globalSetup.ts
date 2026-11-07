@@ -11,7 +11,7 @@ export default async function setup() {
   if (!url.includes("tadbeerly_test")) {
     throw new Error("TEST_DATABASE_URL must point at tadbeerly_test.");
   }
-  const client = postgres(url, { max: 1 });
+  const client = postgres(url, { max: 1, onnotice: () => {} });
   try {
     await migrate(drizzle(client), { migrationsFolder: "./drizzle" });
   } finally {
