@@ -314,14 +314,3 @@ requester portal are planned and not built. The milestone plan is in
 [`docs/superpowers/plans/2026-11-07-tadbeerly-project-plan.md`](docs/superpowers/plans/2026-11-07-tadbeerly-project-plan.md).
 Passkeys, SMS codes and trusted devices are not available either.
 
-## Deployment notes
-
-*To be completed when deployment is set up.* Points that already hold:
-
-- Set `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, `APP_URL`, an email transport and
-  `CRON_SECRET` in the host's environment.
-- The platform proxy must set `x-forwarded-for` (Netlify does), or audit IPs
-  are blank.
-- Netlify's Neon extension is read as a `NETLIFY_DATABASE_URL` fallback;
-  `DATABASE_URL` wins when both are set.
-- Run `npm run db:migrate` against the production database as part of release.
