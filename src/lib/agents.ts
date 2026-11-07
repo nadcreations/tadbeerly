@@ -34,7 +34,11 @@ export const PAGE_SIZE = 50;
 export const LAST_ADMINISTRATOR_MESSAGE =
   "An organization must keep at least one active Administrator.";
 
-/** The agent `userId` inside the actor's organization, locked for the transaction. */
+/**
+ * The agent `userId` inside the actor's organization, locked for the transaction.
+ * NO KEY UPDATE: it blocks other updates and itself, but not the KEY SHARE locks
+ * that inserting a referencing row (invitation, notification) takes.
+ */
 async function lockAgent(exec: Executor, actor: Actor, userId: string) {
   const [target] = await exec
     .select()
@@ -46,7 +50,7 @@ async function lockAgent(exec: Executor, actor: Actor, userId: string) {
         eq(users.kind, "agent"),
       ),
     )
-    .for("update");
+    .for("no key update");
   if (!target) throw new NotFoundError("That person could not be found.");
   return target;
 }
@@ -56,10 +60,13 @@ async function lockAgent(exec: Executor, actor: Actor, userId: string) {
  * no other active Administrator would remain once they stop being one.
  *
  * Call it inside the transaction that makes the change. It first locks the
- * organization's active Administrator rows, in id order, so two concurrent
- * demotions queue up: the second one re-reads after the first commits and is
- * refused. Locking in a fixed order, before anything else is locked, keeps
- * the queue from becoming a deadlock.
+ * organization's active Administrator rows (FOR NO KEY UPDATE, in id order), so
+ * two concurrent demotions queue up: the second one re-reads after the first
+ * commits and is refused. Locking in a fixed order, before anything else is
+ * locked, keeps the queue from becoming a deadlock; NO KEY UPDATE (rather than
+ * FOR UPDATE) leaves the FOR KEY SHARE locks taken by inserts that reference a
+ * user (invitations, notifications) free to proceed, so those cannot deadlock
+ * against the guard.
  */
 export async function assertKeepsAnAdministrator(
   exec: Executor,
@@ -75,7 +82,7 @@ export async function assertKeepsAnAdministrator(
       and u.status = 'active'
       and r.is_locked
     order by u.id
-    for update of u
+    for no key update of u
   `)) as unknown as { id: string }[];
 
   const [target] = await exec
@@ -90,9 +97,12 @@ export async function assertKeepsAnAdministrator(
   }
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  const e = error as { code?: string; cause?: { code?: string } } | null;
-  return e?.code === "23505" || e?.cause?.code === "23505";
+/** A unique violation of the case-insensitive email index, and nothing else. */
+function isDuplicateEmailViolation(error: unknown): boolean {
+  type Pg = { code?: string; constraint_name?: string };
+  const e = error as (Pg & { cause?: Pg }) | null;
+  const pg = e?.code ? e : e?.cause;
+  return pg?.code === "23505" && pg.constraint_name === "users_email_lower_idx";
 }
 
 const DUPLICATE_EMAIL_MESSAGE = "Someone with that email already has an account.";
@@ -160,7 +170,7 @@ export async function inviteAgent(
     });
   } catch (error) {
     // Two simultaneous invites for one address: the unique index decides.
-    if (isUniqueViolation(error)) throw new ConflictError(DUPLICATE_EMAIL_MESSAGE);
+    if (isDuplicateEmailViolation(error)) throw new ConflictError(DUPLICATE_EMAIL_MESSAGE);
     throw error;
   }
 
@@ -470,8 +480,6 @@ export async function listAgents(
   filters: AgentFilters,
   page: number,
 ) {
-  const current = Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1;
-
   const conditions = [eq(users.organizationId, organizationId), eq(users.kind, "agent")];
   const q = filters.q?.trim();
   if (q) {
@@ -488,8 +496,12 @@ export async function listAgents(
   if (status) conditions.push(eq(users.status, status));
   const where = and(...conditions);
 
-  const [rows, [{ total }]] = await Promise.all([
-    db
+  const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(users).where(where);
+  // Clamp to the pages that exist, so a stale or hand-edited ?page= never shows an empty list over a non-zero count.
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const current = Math.min(Math.max(1, Math.trunc(page) || 1), lastPage);
+
+  const rows = await db
       .select({
         id: users.id,
         email: users.email,
@@ -507,9 +519,7 @@ export async function listAgents(
       .where(where)
       .orderBy(users.lastName, users.firstName, users.id)
       .limit(PAGE_SIZE)
-      .offset((current - 1) * PAGE_SIZE),
-    db.select({ total: sql<number>`count(*)::int` }).from(users).where(where),
-  ]);
+      .offset((current - 1) * PAGE_SIZE);
 
   return { rows, total, page: current, pageSize: PAGE_SIZE as typeof PAGE_SIZE };
 }

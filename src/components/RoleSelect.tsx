@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Select } from "./ui";
 import type { ActionState } from "@/lib/actions/types";
@@ -9,20 +9,33 @@ function AutoSelect({
   roleId,
   roles,
   disabled,
+  refused,
 }: {
   roleId: string;
   roles: { id: string; name: string }[];
   disabled?: boolean;
+  /** The last action result; a refusal puts the select back on the server value. */
+  refused: unknown;
 }) {
   const { pending } = useFormStatus();
+  const [value, setValue] = useState(roleId);
+  // A new server value (after revalidation) is the truth.
+  useEffect(() => setValue(roleId), [roleId]);
+  // The state object is new for every result, so a repeated refusal reverts again.
+  useEffect(() => {
+    if (refused) setValue(roleId);
+  }, [refused, roleId]);
   return (
     <Select
       name="roleId"
-      defaultValue={roleId}
+      value={value}
       disabled={disabled || pending}
       aria-label="Role"
       className="!py-1 text-[13px]"
-      onChange={(event) => event.currentTarget.form?.requestSubmit()}
+      onChange={(event) => {
+        setValue(event.currentTarget.value);
+        event.currentTarget.form?.requestSubmit();
+      }}
     >
       {roles.map((role) => (
         <option key={role.id} value={role.id}>
@@ -52,7 +65,12 @@ export function RoleSelect({
   return (
     <form action={formAction}>
       <input type="hidden" name="userId" value={userId} />
-      <AutoSelect roleId={roleId} roles={roles} disabled={disabled} />
+      <AutoSelect
+        roleId={roleId}
+        roles={roles}
+        disabled={disabled}
+        refused={state.error ? state : null}
+      />
       {state.error ? <p className="mt-1 text-[12px] text-red-700">{state.error}</p> : null}
     </form>
   );

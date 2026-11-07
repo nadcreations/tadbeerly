@@ -24,6 +24,7 @@ import {
   withdrawInvitation,
 } from "@/lib/agents";
 import { setTransportForTests, type OutgoingEmail } from "@/lib/email/transport";
+import { acceptInvitation } from "@/lib/invitations";
 import { createSession } from "@/lib/session";
 import { AuthorizationError, ConflictError, NotFoundError } from "@/lib/errors";
 import { createOrganizationWithAdmin } from "@/lib/organizations";
@@ -384,6 +385,14 @@ describe("invitations: resend and withdraw", () => {
     expect(await auditActions()).toEqual(["agent.invited", "agent.invitation_resent"]);
   });
 
+  test("after a resend the old link is refused and the new one works", async () => {
+    const { admin, userId, invitationUrl } = await invited();
+    const oldToken = invitationUrl.split("/").pop()!;
+    const { invitationUrl: fresh } = await resendInvitation(actorOf(admin), userId);
+    await expect(acceptInvitation(oldToken, "Password123!")).rejects.toThrow("This invitation is invalid or has expired.");
+    await expect(acceptInvitation(fresh.split("/").pop()!, "Password123!")).resolves.toMatchObject({ userId });
+  });
+
   test("resend is only for invited users", async () => {
     const { org, admin } = await adminFixture();
     const active = await makeAgent(org.id, "agent");
@@ -494,7 +503,30 @@ describe("listAgents", () => {
     expect((await listAgents(org.id, { status: "disabled" }, 1)).rows.map((r) => r.firstName)).toEqual(["Dora"]);
     expect((await listAgents(org.id, { roleId: admin.roleId! }, 1)).total).toBe(1);
     expect((await listAgents(org.id, { status: "nonsense" }, 1)).total).toBe(3);
-    expect((await listAgents(org.id, {}, 2)).rows).toEqual([]);
+    // Out of range clamps to the last page (here page 1), keeping the count honest.
+    const beyond = await listAgents(org.id, {}, 9);
+    expect(beyond).toMatchObject({ page: 1, total: 3 });
+    expect(beyond.rows).toHaveLength(3);
+    expect((await listAgents(org.id, { status: "disabled" }, 9))).toMatchObject({ page: 1, total: 1 });
+    expect((await listAgents(org.id, {}, 0)).page).toBe(1);
+    expect((await listAgents(org.id, {}, Number.NaN)).page).toBe(1);
+  });
+});
+
+describe("listAgents search", () => {
+  test("an underscore matches literally", async () => {
+    const { org } = await adminFixture();
+    await makeAgent(org.id, "agent", { firstName: "a_b", email: "one@m.example" });
+    await makeAgent(org.id, "agent", { firstName: "axb", email: "two@m.example" });
+    expect((await listAgents(org.id, { q: "a_b" }, 1)).rows.map((r) => r.firstName)).toEqual(["a_b"]);
+  });
+
+  test("paging clamps to the last page of a larger set", async () => {
+    const { org } = await adminFixture();
+    for (let i = 0; i < 51; i++) await makeAgent(org.id, "agent", { passwordHash: null, status: "disabled" });
+    const last = await listAgents(org.id, { status: "disabled" }, 99);
+    expect(last).toMatchObject({ page: 2, total: 51 });
+    expect(last.rows).toHaveLength(1);
   });
 });
 
