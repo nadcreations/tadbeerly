@@ -16,7 +16,7 @@ own organization.
 
 | Concept | Rule |
 | --- | --- |
-| **Organization** | The tenant. Every table except `sessions` and `rate_limits` carries `organization_id`, and every service query filters on the acting user's organization. |
+| **Organization** | The tenant. Every tenant data table carries `organization_id`; user-keyed credential tables (`sessions`, `password_resets`, `mfa_recovery_codes`, `mfa_challenges`) and `rate_limits` are scoped through their user or are global. Every service query filters on the acting user's organization. |
 | **User** | Belongs to one organization, permanently, with an email address that is unique across the whole system (compared case-insensitively). |
 | **Agent** | A user of kind `agent`: someone who works requests. Agents hold exactly one role and use the main application. |
 | **Requester** | A user of kind `requester`: someone who raises requests. Requesters have no role and are sent to the requester portal, which is a placeholder in M0. |

@@ -248,6 +248,7 @@ export const sessions = pgTable(
  * invitation link only offers to create an account somebody was already going
  * to be given, whereas a leaked reset link is a working key to an existing one.
  */
+// Scoped through users, so no organization_id: reached only by token hash or an already-resolved user id.
 export const passwordResets = pgTable(
   "password_resets",
   {
@@ -284,6 +285,7 @@ export const passwordResets = pgTable(
  * the SHA-256 hash is stored — the plaintext is shown once, at generation, and
  * cannot be recovered afterwards.
  */
+// Scoped through users, so no organization_id: reached only by code hash or an already-resolved user id.
 export const mfaRecoveryCodes = pgTable(
   "mfa_recovery_codes",
   {
@@ -311,6 +313,7 @@ export const mfaRecoveryCodes = pgTable(
  * attempts can be counted — five wrong codes burns the challenge and sends the
  * user back to the password screen.
  */
+// Scoped through users, so no organization_id: reached only by token hash or an already-resolved user id.
 export const mfaChallenges = pgTable(
   "mfa_challenges",
   {
