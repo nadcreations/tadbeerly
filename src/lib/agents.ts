@@ -8,11 +8,11 @@ import {
   roles,
   users,
 } from "@/db/schema";
-import { assertCan, type Actor } from "@/lib/authz";
+import { actorRole, assertCan, type Actor } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 import { dispatchSoon, enqueue } from "@/lib/email/outbox";
 import { userInvitationEmail } from "@/lib/email/templates";
-import { ConflictError, NotFoundError } from "@/lib/errors";
+import { AuthorizationError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName, normaliseEmail } from "@/lib/format";
 import {
   ADMIN_RESET_TTL_MINUTES,
@@ -33,6 +33,48 @@ import { generateInvitationToken, invitationExpiry, invitationUrl } from "@/lib/
 export const PAGE_SIZE = 50;
 export const LAST_ADMINISTRATOR_MESSAGE =
   "An organization must keep at least one active Administrator.";
+export const GRANT_ADMINISTRATOR_MESSAGE =
+  "Only an Administrator can grant the Administrator role.";
+export const ADMINISTRATOR_TARGET_MESSAGE =
+  "Only an Administrator can do that to an Administrator.";
+
+/*
+ * The Administrator role is protected. Someone who was delegated Manage users
+ * can run the team, but must not be able to make anyone an Administrator,
+ * themselves included, or take over or lock out an existing one. So only an
+ * actor who holds the locked role may:
+ *
+ *  - grant it (changing someone's role to it, or inviting someone with it);
+ *  - change the role of, disable, enable, reset two-step verification for,
+ *    issue a password reset for, or resend or withdraw the invitation of
+ *    someone who holds it.
+ *
+ * Whether the actor holds it is read from the database inside the transaction
+ * that makes the change, never taken from the Actor object.
+ */
+
+async function isAdministrator(exec: Executor, actor: Actor): Promise<boolean> {
+  return (await actorRole(exec, actor))?.isLocked ?? false;
+}
+
+/**
+ * Refuses a non-Administrator acting on someone who holds the locked role.
+ * Call it after lockAgent, so the role checked is the role being changed.
+ */
+async function assertMayManage(
+  exec: Executor,
+  actor: Actor,
+  target: { roleId: string | null },
+): Promise<void> {
+  if (!target.roleId) return;
+  const [role] = await exec
+    .select({ isLocked: roles.isLocked })
+    .from(roles)
+    .where(eq(roles.id, target.roleId));
+  if (role?.isLocked && !(await isAdministrator(exec, actor))) {
+    throw new AuthorizationError(ADMINISTRATOR_TARGET_MESSAGE);
+  }
+}
 
 /**
  * The agent `userId` inside the actor's organization, locked for the transaction.
@@ -131,10 +173,14 @@ export async function inviteAgent(
   try {
     created = await db.transaction(async (tx) => {
       const [role] = await tx
-        .select({ id: roles.id })
+        .select({ id: roles.id, isLocked: roles.isLocked })
         .from(roles)
         .where(and(eq(roles.id, input.roleId), eq(roles.organizationId, actor.organizationId)));
       if (!role) throw new NotFoundError("That role could not be found.");
+      // The invitation link comes back to the inviter, so this is a grant.
+      if (role.isLocked && !(await isAdministrator(tx, actor))) {
+        throw new AuthorizationError(GRANT_ADMINISTRATOR_MESSAGE);
+      }
 
       const [duplicate] = await tx
         .select({ id: users.id })
@@ -251,6 +297,8 @@ export async function resendInvitation(
 
   const { token, target } = await db.transaction(async (tx) => {
     const target = await lockAgent(tx, actor, userId);
+    // The new link comes back to the actor: resending an Administrator's is a grant.
+    await assertMayManage(tx, actor, target);
     if (target.status !== "invited") {
       throw new ConflictError("Only people who have not accepted yet can be sent a new invitation.");
     }
@@ -289,6 +337,7 @@ export async function withdrawInvitation(actor: Actor, userId: string): Promise<
   const email = await db.transaction(async (tx) => {
     await assertKeepsAnAdministrator(tx, actor.organizationId, { userId });
     const target = await lockAgent(tx, actor, userId);
+    await assertMayManage(tx, actor, target);
     if (target.status !== "invited" || target.passwordHash !== null) {
       throw new ConflictError("Only people who have not accepted their invitation can be withdrawn.");
     }
@@ -323,12 +372,16 @@ export async function changeAgentRole(
       .from(roles)
       .where(and(eq(roles.id, roleId), eq(roles.organizationId, actor.organizationId)));
     if (!role) throw new NotFoundError("That role could not be found.");
+    if (role.isLocked && !(await isAdministrator(tx, actor))) {
+      throw new AuthorizationError(GRANT_ADMINISTRATOR_MESSAGE);
+    }
 
     // Moving someone onto the Administrator role cannot lose an administrator.
     if (!role.isLocked) {
       await assertKeepsAnAdministrator(tx, actor.organizationId, { userId });
     }
     const target = await lockAgent(tx, actor, userId);
+    await assertMayManage(tx, actor, target);
     if (target.roleId === role.id) return null;
 
     const [from] = await tx
@@ -375,6 +428,7 @@ export async function setAgentStatus(
       await assertKeepsAnAdministrator(tx, actor.organizationId, { userId });
     }
     const target = await lockAgent(tx, actor, userId);
+    await assertMayManage(tx, actor, target);
 
     if (status === "disabled") {
       if (target.status !== "active") {
@@ -418,22 +472,20 @@ export async function issueAdminPasswordReset(
 ): Promise<{ url: string }> {
   assertCan(actor, PERMISSIONS.ADMIN_USERS);
 
-  const [target] = await db
-    .select({ id: users.id, status: users.status })
-    .from(users)
-    .where(
-      and(
-        eq(users.id, userId),
-        eq(users.organizationId, actor.organizationId),
-        eq(users.kind, "agent"),
-      ),
-    );
-  if (!target) throw new NotFoundError("That person could not be found.");
-  if (target.status !== "active") {
-    throw new ConflictError("Only active accounts can be sent a password reset.");
-  }
-
-  const { url } = await issuePasswordReset(target.id, actor.id, ADMIN_RESET_TTL_MINUTES);
+  // Checked inside the transaction that issues the link, so neither the
+  // target nor its role can change in between.
+  const { url } = await issuePasswordReset(
+    userId,
+    actor.id,
+    ADMIN_RESET_TTL_MINUTES,
+    async (tx) => {
+      const target = await lockAgent(tx, actor, userId);
+      await assertMayManage(tx, actor, target);
+      if (target.status !== "active") {
+        throw new ConflictError("Only active accounts can be sent a password reset.");
+      }
+    },
+  );
   return { url };
 }
 
@@ -442,6 +494,7 @@ export async function resetAgentMfa(actor: Actor, userId: string): Promise<void>
 
   const target = await db.transaction(async (tx) => {
     const target = await lockAgent(tx, actor, userId);
+    await assertMayManage(tx, actor, target);
     await tx
       .update(users)
       .set({
@@ -511,6 +564,7 @@ export async function listAgents(
         status: users.status,
         roleId: users.roleId,
         roleName: roles.name,
+        roleIsLocked: roles.isLocked,
         mfaEnabled: users.mfaEnabled,
         lastLoginAt: users.lastLoginAt,
       })
@@ -524,10 +578,13 @@ export async function listAgents(
   return { rows, total, page: current, pageSize: PAGE_SIZE as typeof PAGE_SIZE };
 }
 
-/** The roles an agent in this organization can be given. */
+/**
+ * The organization's roles, for role pickers. `isLocked` marks the
+ * Administrator role, which only an Administrator may grant.
+ */
 export async function listAssignableRoles(organizationId: string) {
   return db
-    .select({ id: roles.id, name: roles.name, key: roles.key })
+    .select({ id: roles.id, name: roles.name, key: roles.key, isLocked: roles.isLocked })
     .from(roles)
     .where(eq(roles.organizationId, organizationId))
     .orderBy(roles.name);

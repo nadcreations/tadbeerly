@@ -64,6 +64,20 @@ customisations survive.
 An organization must keep **at least one active Administrator**: disabling,
 demoting or withdrawing the last one is refused.
 
+Delegating *Manage users* or *Manage roles* never lets someone become an
+Administrator:
+
+- **The Administrator role is protected.** Only someone who holds it can grant
+  it (by changing a role or inviting), or change the role of, disable, enable,
+  reset the password or two-step verification of, or resend or withdraw the
+  invitation of someone who holds it.
+- **Role editors can't escalate.** Nobody can change the permissions of their
+  own role, and someone who is not an Administrator can't grant a permission
+  they don't hold, whether by ticking it or by copying a role that has it.
+
+Both rules are enforced in the services, reading the actor's role from the
+database inside the transaction, and the admin pages only offer what is allowed.
+
 ## The audit trail
 
 Every mutation calls `recordAudit` (`src/lib/audit.ts`), which appends a row to

@@ -9,10 +9,13 @@ import {
   mfaChallenges,
   mfaRecoveryCodes,
   passwordResets,
+  roles,
   sessions,
   users,
 } from "@/db/schema";
 import {
+  ADMINISTRATOR_TARGET_MESSAGE,
+  GRANT_ADMINISTRATOR_MESSAGE,
   assertKeepsAnAdministrator,
   changeAgentRole,
   inviteAgent,
@@ -41,7 +44,11 @@ import {
   roleOf,
   userById,
 } from "../setup/factories";
-import { inviteAgentAction, setAgentStatusAction } from "@/lib/actions/agents";
+import {
+  changeAgentRoleAction,
+  inviteAgentAction,
+  setAgentStatusAction,
+} from "@/lib/actions/agents";
 import { clearCookies } from "../setup/nextMocks";
 import { useSilentTransport } from "../setup/transport";
 
@@ -303,6 +310,193 @@ describe("last active Administrator", () => {
     await expect(
       db.transaction((tx) => assertKeepsAnAdministrator(tx, org.id, { userId: agent.id })),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("the Administrator role is protected", () => {
+  /**
+   * An organization with two active Administrators (so the last-Administrator
+   * guard never decides) and a Supervisor whose role was given Manage users.
+   */
+  async function delegate() {
+    const { org, admin } = await adminFixture();
+    const second = await makeAgent(org.id, "administrator", { mfaEnabled: true });
+    const supervisorRole = await roleOf(org.id, "supervisor");
+    await db
+      .update(roles)
+      .set({ permissions: ["admin.users"] })
+      .where(eq(roles.id, supervisorRole.id));
+    const supervisor = await makeAgent(org.id, "supervisor");
+    const dan = await makeAgent(org.id, "agent", { mfaEnabled: true, mfaSecret: "s" });
+    return {
+      org,
+      admin,
+      second,
+      supervisor,
+      dan,
+      actor: actorOf(supervisor),
+      adminRole: await roleOf(org.id, "administrator"),
+      agentRole: await roleOf(org.id, "agent"),
+      readOnlyRole: await roleOf(org.id, "read_only"),
+    };
+  }
+
+  const invite = (roleId: string, email = "new@meridian.example") => ({
+    email,
+    firstName: "New",
+    lastName: "Person",
+    roleId,
+  });
+
+  test("a delegate with Manage users cannot promote itself or anyone to Administrator", async () => {
+    const { actor, supervisor, dan, adminRole } = await delegate();
+    await expect(changeAgentRole(actor, supervisor.id, adminRole.id)).rejects.toThrow(
+      new AuthorizationError(GRANT_ADMINISTRATOR_MESSAGE),
+    );
+    await expect(changeAgentRole(actor, dan.id, adminRole.id)).rejects.toThrow(
+      GRANT_ADMINISTRATOR_MESSAGE,
+    );
+    expect((await userById(supervisor.id)).roleId).toBe(supervisor.roleId);
+    expect((await userById(dan.id)).roleId).toBe(dan.roleId);
+    expect(await count(auditEvents)).toBe(0);
+  });
+
+  test("a delegate cannot invite an Administrator", async () => {
+    const { actor, adminRole } = await delegate();
+    const before = await count(users);
+    await expect(inviteAgent(actor, invite(adminRole.id))).rejects.toBeInstanceOf(
+      AuthorizationError,
+    );
+    await expect(inviteAgent(actor, invite(adminRole.id))).rejects.toThrow(
+      GRANT_ADMINISTRATOR_MESSAGE,
+    );
+    expect(await count(users)).toBe(before);
+    expect(await count(invitations)).toBe(0);
+    expect(await count(emailNotifications)).toBe(0);
+  });
+
+  test("a delegate cannot disable, enable, demote, reset 2-step or issue a reset for an Administrator", async () => {
+    const { org, admin, actor, agentRole } = await delegate();
+    const disabledAdmin = await makeAgent(org.id, "administrator", { status: "disabled" });
+    await db.insert(sessions).values({
+      id: "admin-session",
+      userId: admin.id,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    const refused = new AuthorizationError(ADMINISTRATOR_TARGET_MESSAGE);
+
+    await expect(setAgentStatus(actor, admin.id, "disabled")).rejects.toThrow(refused);
+    await expect(setAgentStatus(actor, disabledAdmin.id, "active")).rejects.toThrow(refused);
+    await expect(changeAgentRole(actor, admin.id, agentRole.id)).rejects.toThrow(refused);
+    await expect(resetAgentMfa(actor, admin.id)).rejects.toThrow(refused);
+    await expect(issueAdminPasswordReset(actor, admin.id)).rejects.toThrow(refused);
+
+    expect(await userById(admin.id)).toMatchObject({
+      status: "active",
+      roleId: admin.roleId,
+      mfaEnabled: true,
+    });
+    expect((await userById(disabledAdmin.id)).status).toBe("disabled");
+    expect(await count(sessions, eq(sessions.userId, admin.id))).toBe(1);
+    expect(await count(passwordResets)).toBe(0);
+    expect(await count(auditEvents)).toBe(0);
+  });
+
+  test("a delegate cannot resend or withdraw an Administrator's invitation", async () => {
+    const { admin, actor, adminRole } = await delegate();
+    const { userId } = await inviteAgent(actorOf(admin), invite(adminRole.id));
+    const refused = new AuthorizationError(ADMINISTRATOR_TARGET_MESSAGE);
+
+    // Resending would hand the delegate a working link to an Administrator account.
+    await expect(resendInvitation(actor, userId)).rejects.toThrow(refused);
+    await expect(withdrawInvitation(actor, userId)).rejects.toThrow(refused);
+
+    expect(await count(users, eq(users.id, userId))).toBe(1);
+    const pending = await db
+      .select()
+      .from(invitations)
+      .where(and(eq(invitations.userId, userId), eq(invitations.status, "pending")));
+    expect(pending).toHaveLength(1);
+  });
+
+  test("a delegate can still manage agents who are not Administrators", async () => {
+    const { actor, dan, agentRole, readOnlyRole } = await delegate();
+
+    await changeAgentRole(actor, dan.id, readOnlyRole.id);
+    await resetAgentMfa(actor, dan.id);
+    const { url } = await issueAdminPasswordReset(actor, dan.id);
+    await setAgentStatus(actor, dan.id, "disabled");
+    await setAgentStatus(actor, dan.id, "active");
+    const invited = await inviteAgent(actor, invite(agentRole.id));
+    await resendInvitation(actor, invited.userId);
+    await withdrawInvitation(actor, invited.userId);
+
+    expect(url).toMatch(/\/reset\/.+/);
+    expect(await userById(dan.id)).toMatchObject({
+      roleId: readOnlyRole.id,
+      status: "active",
+      mfaEnabled: false,
+    });
+    expect(await auditActions()).toEqual([
+      "agent.role_changed",
+      "auth.mfa_reset",
+      "auth.password_reset_issued",
+      "agent.disabled",
+      "agent.enabled",
+      "agent.invited",
+      "agent.invitation_resent",
+      "agent.invitation_withdrawn",
+    ]);
+  });
+
+  test("an Administrator can do all of it", async () => {
+    const { admin, second, dan, adminRole, agentRole } = await delegate();
+    const actor = actorOf(admin);
+
+    const invited = await inviteAgent(actor, invite(adminRole.id));
+    await resendInvitation(actor, invited.userId);
+    await withdrawInvitation(actor, invited.userId);
+    await changeAgentRole(actor, dan.id, adminRole.id);
+    await resetAgentMfa(actor, second.id);
+    await issueAdminPasswordReset(actor, second.id);
+    await setAgentStatus(actor, second.id, "disabled");
+    await setAgentStatus(actor, second.id, "active");
+    await changeAgentRole(actor, second.id, agentRole.id);
+
+    expect((await userById(dan.id)).roleId).toBe(adminRole.id);
+    expect(await userById(second.id)).toMatchObject({
+      status: "active",
+      roleId: agentRole.id,
+      mfaEnabled: false,
+    });
+  });
+
+  test("whether the actor is an Administrator comes from the database, not the actor object", async () => {
+    const { org, dan, adminRole } = await delegate();
+    const former = await makeAgent(org.id, "administrator", { mfaEnabled: true });
+    // Its actor still carries every permission, as a stale or forged one might.
+    const stale = actorOf(former);
+    await db
+      .update(users)
+      .set({ roleId: (await roleOf(org.id, "supervisor")).id })
+      .where(eq(users.id, former.id));
+
+    await expect(changeAgentRole(stale, dan.id, adminRole.id)).rejects.toThrow(
+      GRANT_ADMINISTRATOR_MESSAGE,
+    );
+    expect((await userById(dan.id)).roleId).toBe(dan.roleId);
+  });
+
+  test("the refusal reaches the form as a message", async () => {
+    const { supervisor, dan, adminRole } = await delegate();
+    clearCookies();
+    await createSession(supervisor.id);
+    const fd = new FormData();
+    fd.set("userId", dan.id);
+    fd.set("roleId", adminRole.id);
+    const state = await changeAgentRoleAction({}, fd);
+    expect(state.error).toBe(GRANT_ADMINISTRATOR_MESSAGE);
+    expect((await userById(dan.id)).roleId).toBe(dan.roleId);
   });
 });
 

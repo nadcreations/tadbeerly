@@ -53,6 +53,10 @@ export default async function AgentsPage({
     listAgents(user.organizationId, { q, roleId: role, status }, parsePage(query.page)),
     listAssignableRoles(user.organizationId),
   ]);
+  // Only an Administrator may grant the Administrator role or act on someone
+  // who holds it. The services enforce this; the page just doesn't offer it.
+  const isAdministrator = user.role?.isLocked ?? false;
+  const grantable = isAdministrator ? roles : roles.filter((r) => !r.isLocked);
 
   return (
     <>
@@ -109,6 +113,7 @@ export default async function AgentsPage({
             <tbody>
               {list.rows.map((row, index) => {
                 const isSelf = row.id === user.id;
+                const protectedRow = !isAdministrator && row.roleIsLocked === true;
                 return (
                   <tr key={row.id}>
                     {/* Position in the whole list, so row 51 reads 51. */}
@@ -134,7 +139,9 @@ export default async function AgentsPage({
                         action={changeAgentRoleAction}
                         userId={row.id}
                         roleId={row.roleId ?? ""}
-                        roles={roles}
+                        // A protected row still lists its own role, so the select shows it.
+                        roles={protectedRow ? roles : grantable}
+                        disabled={protectedRow}
                       />
                     </Td>
                     <Td>
@@ -144,62 +151,68 @@ export default async function AgentsPage({
                       {row.lastLoginAt ? formatDateTime(row.lastLoginAt) : "Never"}
                     </Td>
                     <Td>
-                      <div className="flex flex-wrap items-start justify-end gap-2">
-                        {row.status === "invited" ? (
-                          <>
-                            <ActionButton
-                              action={resendInvitationAction}
-                              fields={{ userId: row.id }}
-                            >
-                              Resend invitation
-                            </ActionButton>
-                            <ActionButton
-                              action={withdrawInvitationAction}
-                              fields={{ userId: row.id }}
-                              confirm={`Withdraw the invitation to ${row.email}? The account is removed.`}
-                              variant="danger"
-                            >
-                              Withdraw
-                            </ActionButton>
-                          </>
-                        ) : null}
-                        {row.status === "active" ? (
-                          <>
-                            <ActionButton
-                              action={issueAdminPasswordResetAction}
-                              fields={{ userId: row.id }}
-                              confirm={`Issue a password reset link for ${row.email}? Their current password keeps working until they use it.`}
-                            >
-                              Reset password
-                            </ActionButton>
-                            <ActionButton
-                              action={resetAgentMfaAction}
-                              fields={{ userId: row.id }}
-                              confirm={`Reset two-step verification for ${fullName(row)}? They are signed out and must set it up again.`}
-                            >
-                              Reset 2-step
-                            </ActionButton>
-                            {isSelf ? null : (
+                      {protectedRow ? (
+                        <p className="text-end text-[12px] text-ink-500">
+                          Only an Administrator can change an Administrator.
+                        </p>
+                      ) : (
+                        <div className="flex flex-wrap items-start justify-end gap-2">
+                          {row.status === "invited" ? (
+                            <>
                               <ActionButton
-                                action={setAgentStatusAction}
-                                fields={{ userId: row.id, status: "disabled" }}
-                                confirm={`Disable ${fullName(row)}? They are signed out immediately.`}
+                                action={resendInvitationAction}
+                                fields={{ userId: row.id }}
+                              >
+                                Resend invitation
+                              </ActionButton>
+                              <ActionButton
+                                action={withdrawInvitationAction}
+                                fields={{ userId: row.id }}
+                                confirm={`Withdraw the invitation to ${row.email}? The account is removed.`}
                                 variant="danger"
                               >
-                                Disable
+                                Withdraw
                               </ActionButton>
-                            )}
-                          </>
-                        ) : null}
-                        {row.status === "disabled" ? (
-                          <ActionButton
-                            action={setAgentStatusAction}
-                            fields={{ userId: row.id, status: "active" }}
-                          >
-                            Enable
-                          </ActionButton>
-                        ) : null}
-                      </div>
+                            </>
+                          ) : null}
+                          {row.status === "active" ? (
+                            <>
+                              <ActionButton
+                                action={issueAdminPasswordResetAction}
+                                fields={{ userId: row.id }}
+                                confirm={`Issue a password reset link for ${row.email}? Their current password keeps working until they use it.`}
+                              >
+                                Reset password
+                              </ActionButton>
+                              <ActionButton
+                                action={resetAgentMfaAction}
+                                fields={{ userId: row.id }}
+                                confirm={`Reset two-step verification for ${fullName(row)}? They are signed out and must set it up again.`}
+                              >
+                                Reset 2-step
+                              </ActionButton>
+                              {isSelf ? null : (
+                                <ActionButton
+                                  action={setAgentStatusAction}
+                                  fields={{ userId: row.id, status: "disabled" }}
+                                  confirm={`Disable ${fullName(row)}? They are signed out immediately.`}
+                                  variant="danger"
+                                >
+                                  Disable
+                                </ActionButton>
+                              )}
+                            </>
+                          ) : null}
+                          {row.status === "disabled" ? (
+                            <ActionButton
+                              action={setAgentStatusAction}
+                              fields={{ userId: row.id, status: "active" }}
+                            >
+                              Enable
+                            </ActionButton>
+                          ) : null}
+                        </div>
+                      )}
                     </Td>
                   </tr>
                 );
@@ -275,7 +288,7 @@ export default async function AgentsPage({
                   <option value="" disabled>
                     Select a role…
                   </option>
-                  {roles.map((r) => (
+                  {grantable.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.name}
                     </option>

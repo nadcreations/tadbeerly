@@ -102,15 +102,20 @@ async function issueWith(
  * Issues a reset link. Callers decide who may ask: an administrator action
  * passes its own id (and shows the URL), self-service passes null. Audits
  * `auth.password_reset_issued` when an administrator issued it.
+ *
+ * `guard` runs first inside the same transaction, so a caller's checks on the
+ * target hold for the write; throwing from it issues nothing.
  */
 export async function issuePasswordReset(
   userId: string,
   issuedByUserId: string | null,
   ttlMinutes: number,
+  guard?: (exec: Executor) => Promise<void>,
 ): Promise<{ url: string; expiresAt: Date }> {
-  const result = await db.transaction((tx) =>
-    issueWith(tx, userId, issuedByUserId, ttlMinutes),
-  );
+  const result = await db.transaction(async (tx) => {
+    await guard?.(tx);
+    return issueWith(tx, userId, issuedByUserId, ttlMinutes);
+  });
 
   if (issuedByUserId) {
     const [target] = await db

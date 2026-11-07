@@ -165,7 +165,7 @@ export const HELP_TOPICS: HelpTopic[] = [
         items: [
           "Open Admin, then Agents, and scroll to the card titled Invite an agent.",
           "Fill in First name, Last name and Email. Job title is optional.",
-          "Choose a Role. The list shows every role in your organization.",
+          "Choose a Role. The list shows your organization's roles; Administrator appears only if you are an Administrator yourself.",
           "Select Send invitation. The person gets an email with a link to choose a password. It works for 30 days.",
         ],
       },
@@ -203,6 +203,11 @@ export const HELP_TOPICS: HelpTopic[] = [
         kind: "note",
         tone: "warning",
         text: "An organization must keep at least one active Administrator. Disabling, demoting or withdrawing the last one is refused with that message. Make another person an Administrator first.",
+      },
+      {
+        kind: "note",
+        tone: "info",
+        text: "Only an Administrator can make someone an Administrator, or change the role of, disable, enable, reset the password or two-step verification of, or resend or withdraw the invitation of an Administrator. If you manage users without being an Administrator, Administrator rows show Only an Administrator can change an Administrator instead of buttons.",
       },
     ],
   },
@@ -256,6 +261,11 @@ export const HELP_TOPICS: HelpTopic[] = [
       {
         kind: "para",
         text: "On the Administrator role the boxes are disabled and a Locked badge is shown.",
+      },
+      {
+        kind: "note",
+        tone: "info",
+        text: "You can't change the permissions of your own role. Unless you are an Administrator, you also can't grant a permission you don't have yourself: its box stays disabled, and you can't create a role from one that has it. You can still keep or remove a permission a role already has.",
       },
       {
         kind: "steps",

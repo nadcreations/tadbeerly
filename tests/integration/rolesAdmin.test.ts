@@ -3,11 +3,121 @@ import "../setup/nextMocks";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { auditEvents, roles } from "@/db/schema";
-import { createRole, getRole, listRoles, updateRolePermissions } from "@/lib/rolesAdmin";
+import {
+  GRANT_HELD_ONLY_MESSAGE,
+  OWN_ROLE_MESSAGE,
+  createRole,
+  getRole,
+  listRoles,
+  updateRolePermissions,
+} from "@/lib/rolesAdmin";
 import { AuthorizationError, ConflictError, NotFoundError } from "@/lib/errors";
+import { ALL_PERMISSIONS } from "@/lib/permissions";
 import { actorOf, adminFixture, count, makeAgent, makeOrg, resetDb, roleOf } from "../setup/factories";
 
 beforeEach(resetDb);
+
+describe("role editors cannot escalate", () => {
+  /** A Supervisor whose role was given Manage roles and nothing else. */
+  async function roleEditor() {
+    const { org, admin } = await adminFixture();
+    const supervisorRole = await roleOf(org.id, "supervisor");
+    await db
+      .update(roles)
+      .set({ permissions: ["admin.roles"] })
+      .where(eq(roles.id, supervisorRole.id));
+    const editor = await makeAgent(org.id, "supervisor");
+    return {
+      org,
+      admin,
+      editor,
+      actor: actorOf(editor),
+      supervisorRole,
+      agentRole: await roleOf(org.id, "agent"),
+      adminRole: await roleOf(org.id, "administrator"),
+    };
+  }
+
+  test("an editor cannot change the permissions of its own role, even to remove one", async () => {
+    const { org, actor, supervisorRole } = await roleEditor();
+    await expect(
+      updateRolePermissions(actor, supervisorRole.id, ["admin.roles", "admin.users"]),
+    ).rejects.toThrow(new ConflictError(OWN_ROLE_MESSAGE));
+    await expect(updateRolePermissions(actor, supervisorRole.id, [])).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+    expect((await roleOf(org.id, "supervisor")).permissions).toEqual(["admin.roles"]);
+  });
+
+  test("an editor without Manage users cannot grant it", async () => {
+    const { org, actor, agentRole } = await roleEditor();
+    await expect(updateRolePermissions(actor, agentRole.id, ["admin.users"])).rejects.toThrow(
+      new AuthorizationError(GRANT_HELD_ONLY_MESSAGE),
+    );
+    await expect(
+      updateRolePermissions(actor, agentRole.id, ["admin.roles", "admin.users"]),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+    expect((await roleOf(org.id, "agent")).permissions).toEqual([]);
+    expect(await count(auditEvents)).toBe(0);
+  });
+
+  test("an editor can grant what it holds, and keep or remove what it does not", async () => {
+    const { org, admin, actor, agentRole } = await roleEditor();
+    await updateRolePermissions(actor, agentRole.id, ["admin.roles"]);
+    expect((await roleOf(org.id, "agent")).permissions).toEqual(["admin.roles"]);
+
+    await updateRolePermissions(actorOf(admin), agentRole.id, ["admin.roles", "admin.audit"]);
+    // Keeping View audit trail is not granting it, and removing Manage roles is allowed.
+    await updateRolePermissions(actor, agentRole.id, ["admin.audit"]);
+    expect((await roleOf(org.id, "agent")).permissions).toEqual(["admin.audit"]);
+
+    await expect(
+      updateRolePermissions(actor, agentRole.id, ["admin.audit", "admin.config"]),
+    ).rejects.toThrow(GRANT_HELD_ONLY_MESSAGE);
+    expect((await roleOf(org.id, "agent")).permissions).toEqual(["admin.audit"]);
+  });
+
+  test("an editor cannot copy a role whose permissions it lacks", async () => {
+    const { org, admin, actor, adminRole, agentRole, supervisorRole } = await roleEditor();
+    const before = await count(roles, eq(roles.organizationId, org.id));
+    await expect(
+      createRole(actor, { name: "Shadow admin", copyFromRoleId: adminRole.id }),
+    ).rejects.toThrow(new AuthorizationError(GRANT_HELD_ONLY_MESSAGE));
+
+    await updateRolePermissions(actorOf(admin), agentRole.id, ["admin.users"]);
+    await expect(
+      createRole(actor, { name: "User manager", copyFromRoleId: agentRole.id }),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+    expect(await count(roles, eq(roles.organizationId, org.id))).toBe(before);
+
+    // Copying what it holds is fine.
+    const { roleId } = await createRole(actor, { name: "Role clerk", copyFromRoleId: supervisorRole.id });
+    expect((await getRole(org.id, roleId)).permissions).toEqual(["admin.roles"]);
+  });
+
+  test("an Administrator can do all of it", async () => {
+    const { org, admin, supervisorRole, adminRole } = await roleEditor();
+    await updateRolePermissions(actorOf(admin), supervisorRole.id, ["admin.roles", "admin.users"]);
+    expect((await roleOf(org.id, "supervisor")).permissions).toEqual(["admin.users", "admin.roles"]);
+    const { roleId } = await createRole(actorOf(admin), {
+      name: "Deputy",
+      copyFromRoleId: adminRole.id,
+    });
+    const deputy = await getRole(org.id, roleId);
+    expect(deputy.permissions).toEqual([...ALL_PERMISSIONS]);
+    expect(deputy.isLocked).toBe(false);
+  });
+
+  test("what the editor holds comes from the database, not the actor object", async () => {
+    const { org, editor, agentRole } = await roleEditor();
+    // An actor claiming every permission is still held to its role as stored.
+    const inflated = actorOf(editor, [...ALL_PERMISSIONS]);
+    await expect(updateRolePermissions(inflated, agentRole.id, ["admin.users"])).rejects.toThrow(
+      GRANT_HELD_ONLY_MESSAGE,
+    );
+    expect((await roleOf(org.id, "agent")).permissions).toEqual([]);
+  });
+});
 
 async function auditRows(orgId: string, action: string) {
   return db

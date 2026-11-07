@@ -1,5 +1,8 @@
+import { and, eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
+import type { Executor } from "@/db";
+import { roles, users } from "@/db/schema";
 import { mfaGateRedirect } from "@/lib/mfa";
 import { getCurrentUser, type SessionUser } from "@/lib/session";
 import { hasPermission, type Permission } from "@/lib/permissions";
@@ -9,6 +12,25 @@ export { AuthorizationError };
 
 /** What a service needs to know about who is acting. */
 export type Actor = Pick<SessionUser, "id" | "organizationId" | "permissions">;
+
+export type ActorRole = { id: string; isLocked: boolean; permissions: string[] };
+
+/**
+ * The actor's role as stored right now, or null if they have none.
+ *
+ * Rules that depend on who the actor is (only an Administrator may grant the
+ * Administrator role; nobody may grant a permission they lack) read it here,
+ * through the service's own transaction, rather than trusting the Actor object
+ * a caller passed in.
+ */
+export async function actorRole(exec: Executor, actor: Actor): Promise<ActorRole | null> {
+  const [row] = await exec
+    .select({ id: roles.id, isLocked: roles.isLocked, permissions: roles.permissions })
+    .from(users)
+    .innerJoin(roles, eq(roles.id, users.roleId))
+    .where(and(eq(users.id, actor.id), eq(users.organizationId, actor.organizationId)));
+  return row ?? null;
+}
 
 export function can(user: Pick<SessionUser, "permissions">, p: Permission): boolean {
   return hasPermission(user.permissions, p);
