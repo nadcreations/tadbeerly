@@ -10,6 +10,7 @@ import {
 } from "@/lib/email/outbox";
 import { setTransportForTests, type EmailTransport } from "@/lib/email/transport";
 import { count, makeAgent, makeOrg, resetDb } from "../setup/factories";
+import { useSilentTransport } from "../setup/transport";
 
 const content = { subject: "Hello", text: "text", html: "<p>html</p>" };
 const row = (organizationId: string, n = 0): EnqueueInput => ({
@@ -27,7 +28,7 @@ beforeEach(async () => {
   await resetDb();
 });
 afterEach(() => {
-  setTransportForTests(null);
+  useSilentTransport();
   vi.restoreAllMocks();
 });
 

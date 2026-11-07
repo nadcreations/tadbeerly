@@ -43,6 +43,7 @@ import {
 } from "../setup/factories";
 import { inviteAgentAction, setAgentStatusAction } from "@/lib/actions/agents";
 import { clearCookies } from "../setup/nextMocks";
+import { useSilentTransport } from "../setup/transport";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -56,7 +57,7 @@ beforeEach(async () => {
   sent = [];
   setTransportForTests({ name: "recording", send: async (email) => void sent.push(email) });
 });
-afterEach(() => setTransportForTests(null));
+afterEach(() => useSilentTransport());
 
 const auditActions = async () =>
   (await db.select({ a: auditEvents.action }).from(auditEvents).orderBy(auditEvents.occurredAt)).map(

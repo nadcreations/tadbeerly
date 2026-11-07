@@ -8,6 +8,6 @@ process.env.DATABASE_URL = requireEnv("TEST_DATABASE_URL");
  * is the default here; the production default stays "console", and tests that
  * need to observe sends install their own with setTransportForTests.
  */
-import { setTransportForTests } from "@/lib/email/transport";
+import { useSilentTransport } from "./transport";
 
-setTransportForTests({ name: "silent", send: async () => {} });
+useSilentTransport();

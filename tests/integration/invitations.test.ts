@@ -11,6 +11,7 @@ import { verifyPassword } from "@/lib/password";
 import { setTransportForTests } from "@/lib/email/transport";
 import { acceptInvitationAction } from "@/lib/actions/invitations";
 import { getCookie } from "../setup/nextMocks";
+import { useSilentTransport } from "../setup/transport";
 import {
   actorOf,
   adminFixture,
@@ -35,7 +36,7 @@ beforeEach(async () => {
   await resetDb();
   setTransportForTests({ name: "silent", send: async () => {} });
 });
-afterEach(() => setTransportForTests(null));
+afterEach(() => useSilentTransport());
 
 async function invite(email = "dan@meridian.example") {
   const { org, admin } = await adminFixture();

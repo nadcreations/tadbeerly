@@ -104,3 +104,27 @@ export async function listAuditEvents(
 
   return { rows, total, page: safePage, pageSize: PAGE_SIZE };
 }
+
+/**
+ * Parses a yyyy-mm-dd query value into a bound on occurredAt. "end" is the last
+ * millisecond of that day (UTC), so a `to` filter includes the whole day.
+ * Anything that is not a real calendar date is ignored.
+ */
+export function parseDayBound(raw: string | undefined, edge: "start" | "end"): Date | null {
+  if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const start = new Date(`${raw}T00:00:00.000Z`);
+  if (Number.isNaN(start.getTime()) || start.toISOString().slice(0, 10) !== raw) return null;
+  return edge === "start" ? start : new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+}
+
+/** Every agent of the organization, for the actor filter. */
+export async function listAuditActorOptions(
+  organizationId: string,
+): Promise<{ id: string; name: string }[]> {
+  const rows = await db
+    .select({ id: users.id, firstName: users.firstName, lastName: users.lastName })
+    .from(users)
+    .where(and(eq(users.organizationId, organizationId), eq(users.kind, "agent")))
+    .orderBy(users.firstName, users.lastName);
+  return rows.map((r) => ({ id: r.id, name: `${r.firstName} ${r.lastName}` }));
+}

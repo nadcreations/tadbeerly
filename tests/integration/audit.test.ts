@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { db } from "@/db";
 import { auditEvents } from "@/db/schema";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/audit";
-import { auditActionLabel, listAuditEvents } from "@/lib/auditQueries";
+import { auditActionLabel, listAuditActorOptions, listAuditEvents, parseDayBound } from "@/lib/auditQueries";
 import { createOrganizationWithAdmin } from "@/lib/organizations";
-import { count, makeAgent, makeOrg, resetDb } from "../setup/factories";
+import { count, makeAgent, makeOrg, makeRequester, resetDb } from "../setup/factories";
 
 beforeEach(async () => {
   setHeaders({});
@@ -104,5 +104,35 @@ describe("audit trail", () => {
     const r = await createOrganizationWithAdmin({ name: "Meridian", admin: { email: "a@m.example", firstName: "A", lastName: "B", password: "Password123!" } });
     const [row] = await rowsOf(r.organizationId);
     expect(row).toMatchObject({ action: "organization.created", summary: "Organization Meridian created", actorUserId: null, entityType: "organization", entityId: r.organizationId, metadata: { adminUserId: r.adminUserId } });
+  });
+});
+
+describe("audit page helpers", () => {
+  test("a to date includes the whole day", async () => {
+    const a = await makeOrg();
+    await db.insert(auditEvents).values([
+      { action: "organization.updated", summary: "late", organizationId: a.id, occurredAt: new Date("2026-03-05T23:30:00.000Z") },
+      { action: "organization.updated", summary: "next", organizationId: a.id, occurredAt: new Date("2026-03-06T00:00:00.000Z") },
+    ]);
+    const to = parseDayBound("2026-03-05", "end")!;
+    const res = await listAuditEvents(a.id, { to }, 1);
+    expect(res.rows.map((r) => r.summary)).toEqual(["late"]);
+    expect(parseDayBound("2026-03-05", "start")!.toISOString()).toBe("2026-03-05T00:00:00.000Z");
+  });
+
+  test("invalid dates are ignored", () => {
+    for (const bad of [undefined, "", "tomorrow", "2026-02-30", "2026-3-5"]) {
+      expect(parseDayBound(bad, "end")).toBeNull();
+    }
+  });
+
+  test("actor options are the organization's agents only", async () => {
+    const a = await makeOrg("A");
+    const b = await makeOrg("B");
+    const mine = await makeAgent(a.id, "agent");
+    await makeAgent(b.id, "agent");
+    await makeRequester(a.id);
+    const options = await listAuditActorOptions(a.id);
+    expect(options.map((o) => o.id)).toEqual([mine.id]);
   });
 });
