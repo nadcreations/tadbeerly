@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db, type Executor } from "@/db";
 import { invitations, organizations, roles, users } from "@/db/schema";
+import { recordAudit } from "@/lib/audit";
 import { ConflictError } from "@/lib/errors";
 import { normaliseEmail } from "@/lib/format";
 import { hashPassword } from "@/lib/password";
@@ -48,7 +49,7 @@ export async function createOrganizationWithAdmin(
     ? await hashPassword(input.admin.password)
     : null;
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [dupOrg] = await tx
       .select({ id: organizations.id })
       .from(organizations)
@@ -96,4 +97,15 @@ export async function createOrganizationWithAdmin(
 
     return { organizationId: org.id, adminUserId: admin.id, invitationUrl: url };
   });
+
+  await recordAudit({
+    action: "organization.created",
+    summary: `Organization ${name} created`,
+    organizationId: result.organizationId,
+    actorUserId: null,
+    entityType: "organization",
+    entityId: result.organizationId,
+    metadata: { adminUserId: result.adminUserId },
+  });
+  return result;
 }
