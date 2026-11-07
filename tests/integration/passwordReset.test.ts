@@ -19,11 +19,16 @@ import {
   requestPasswordReset,
 } from "@/lib/passwordReset";
 import { requestReset } from "@/lib/actions/passwordReset";
+import * as sessionModule from "@/lib/session";
 import { createSession } from "@/lib/session";
 import { verifyPassword } from "@/lib/password";
 import { hitRateLimit } from "@/lib/rateLimit";
 import { count, makeAgent, makeOrg, resetDb, userById } from "../setup/factories";
 
+vi.mock("@/lib/session", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/session")>();
+  return { ...original, revokeUserSessions: vi.fn(original.revokeUserSessions) };
+});
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
     throw new Error(`REDIRECT:${url}`);
@@ -154,6 +159,19 @@ describe("consumePasswordReset", () => {
     await expect(consumePasswordReset(tokenOf(url), "Another12345!")).rejects.toThrow(GENERIC);
   });
 
+  test("sessions are deleted inside the transaction, not after it commits", async () => {
+    const org = await makeOrg();
+    const u = await makeAgent(org.id, "agent");
+    const { url } = await issuePasswordReset(u.id, null, 60);
+    const spy = vi.mocked(sessionModule.revokeUserSessions);
+    spy.mockClear();
+    await consumePasswordReset(tokenOf(url), "NewPassword123!");
+    expect(spy).toHaveBeenCalledTimes(1);
+    // The second argument is the transaction handle, not the shared connection.
+    expect(spy.mock.calls[0][1]).toBeDefined();
+    expect(spy.mock.calls[0][1]).not.toBe(db);
+  });
+
   test("parallel submissions: exactly one succeeds", async () => {
     const org = await makeOrg();
     const u = await makeAgent(org.id);
@@ -208,6 +226,11 @@ describe("requestReset action", () => {
     expect(known.success).toBe("If an account exists for that address, we've emailed a reset link.");
     await Promise.all(afterTasks.splice(0));
     expect(await count(emailNotifications)).toBe(1);
+  });
+
+  test("an address over 254 characters is a field error", async () => {
+    const r = await requestReset({}, form(`${"a".repeat(250)}@m.example`));
+    expect(r.fieldErrors?.email).toBeDefined();
   });
 
   test("an invalid address is a field error", async () => {

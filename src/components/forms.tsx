@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useFormStatus } from "react-dom";
+import { CopyButton } from "./CopyButton";
 import { Button, FormError, FormSuccess } from "./ui";
 import type { ActionState } from "@/lib/actions/types";
 
@@ -46,6 +47,7 @@ export function ActionForm({
         <div className="space-y-4">
           <FormError message={state.error} />
           <FormSuccess message={state.success} />
+          {state.link ? <CopyButton value={state.link} /> : null}
           {children}
         </div>
       </FieldErrorContext.Provider>
@@ -110,6 +112,12 @@ export function ActionButton({
       </SubmitButton>
       {state.error ? (
         <p className="mt-1 text-[12px] text-red-700">{state.error}</p>
+      ) : null}
+      {state.link ? (
+        <div className="mt-1 space-y-1">
+          <p className="text-[12px] text-ink-600">{state.success}</p>
+          <CopyButton value={state.link} />
+        </div>
       ) : null}
     </form>
   );

@@ -32,6 +32,19 @@ export const PASSWORD_MAX_LENGTH = 200;
 export const PASSWORD_TOO_SHORT_MESSAGE = `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`;
 export const PASSWORD_TOO_LONG_MESSAGE = "Password is too long.";
 
+/**
+ * The one password rule, shared by reset and invitation acceptance. Throws
+ * PasswordResetError (field "password") so callers report it the same way.
+ */
+export function validateNewPassword(password: string): void {
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    throw new PasswordResetError(PASSWORD_TOO_SHORT_MESSAGE, "password");
+  }
+  if (password.length > PASSWORD_MAX_LENGTH) {
+    throw new PasswordResetError(PASSWORD_TOO_LONG_MESSAGE, "password");
+  }
+}
+
 /** Thrown by consumePasswordReset; `field` says which input to blame. */
 export class PasswordResetError extends Error {
   constructor(
@@ -55,6 +68,14 @@ function expiryLabel(ttlMinutes: number): string {
   return `${ttlMinutes} minutes`;
 }
 
+/** Marks every unused reset link for the user as spent. */
+export async function spendLiveResets(exec: Executor, userId: string): Promise<void> {
+  await exec
+    .update(passwordResets)
+    .set({ usedAt: new Date() })
+    .where(and(eq(passwordResets.userId, userId), isNull(passwordResets.usedAt)));
+}
+
 async function issueWith(
   exec: Executor,
   userId: string,
@@ -65,10 +86,7 @@ async function issueWith(
   const expiresAt = new Date(Date.now() + ttlMinutes * 60_000);
 
   // Only the newest link works: anything earlier and still unused is spent.
-  await exec
-    .update(passwordResets)
-    .set({ usedAt: new Date() })
-    .where(and(eq(passwordResets.userId, userId), isNull(passwordResets.usedAt)));
+  await spendLiveResets(exec, userId);
 
   await exec.insert(passwordResets).values({
     userId,
@@ -215,12 +233,7 @@ export async function consumePasswordReset(
   token: string,
   newPassword: string,
 ): Promise<{ userId: string }> {
-  if (newPassword.length < PASSWORD_MIN_LENGTH) {
-    throw new PasswordResetError(PASSWORD_TOO_SHORT_MESSAGE, "password");
-  }
-  if (newPassword.length > PASSWORD_MAX_LENGTH) {
-    throw new PasswordResetError(PASSWORD_TOO_LONG_MESSAGE, "password");
-  }
+  validateNewPassword(newPassword);
 
   const passwordHash = await hashPassword(newPassword);
 
@@ -251,10 +264,12 @@ export async function consumePasswordReset(
       });
     // A disabled account gets no access back; rolling back leaves the link as it was.
     if (!updated) throw new PasswordResetError(INVALID_LINK_MESSAGE, "link");
+
+    // Inside the transaction: the new password and the signed-out state land together.
+    await revokeUserSessions(updated.id, tx);
     return updated;
   });
 
-  await revokeUserSessions(user.id);
   await clearRateLimit(`login:${normaliseEmail(user.email)}`);
   await recordAudit({
     action: "auth.password_reset_completed",

@@ -2,7 +2,7 @@ import { cookies, headers } from "next/headers";
 import { createHash, randomBytes } from "node:crypto";
 import { eq, lt } from "drizzle-orm";
 import { cache } from "react";
-import { db } from "@/db";
+import { db, type Executor } from "@/db";
 import { sessions, users, organizations, roles } from "@/db/schema";
 import type { Permission } from "@/lib/permissions";
 
@@ -140,6 +140,10 @@ export async function purgeExpiredSessions(): Promise<void> {
   await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
 }
 
-export async function revokeUserSessions(userId: string): Promise<void> {
-  await db.delete(sessions).where(eq(sessions.userId, userId));
+/** Pass a transaction as `exec` to make the revocation part of it. */
+export async function revokeUserSessions(
+  userId: string,
+  exec: Executor = db,
+): Promise<void> {
+  await exec.delete(sessions).where(eq(sessions.userId, userId));
 }

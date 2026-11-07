@@ -1,0 +1,553 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import "../setup/nextMocks";
+import { and, eq, isNull } from "drizzle-orm";
+import { db } from "@/db";
+import {
+  auditEvents,
+  emailNotifications,
+  invitations,
+  mfaChallenges,
+  mfaRecoveryCodes,
+  passwordResets,
+  sessions,
+  users,
+} from "@/db/schema";
+import {
+  assertKeepsAnAdministrator,
+  changeAgentRole,
+  inviteAgent,
+  issueAdminPasswordReset,
+  listAgents,
+  resendInvitation,
+  resetAgentMfa,
+  setAgentStatus,
+  withdrawInvitation,
+} from "@/lib/agents";
+import { setTransportForTests, type OutgoingEmail } from "@/lib/email/transport";
+import { createSession } from "@/lib/session";
+import { AuthorizationError, ConflictError, NotFoundError } from "@/lib/errors";
+import { createOrganizationWithAdmin } from "@/lib/organizations";
+import { issuePasswordReset } from "@/lib/passwordReset";
+import {
+  actorOf,
+  adminFixture,
+  count,
+  makeAgent,
+  makeOrg,
+  makeRequester,
+  notifications,
+  resetDb,
+  roleOf,
+  userById,
+} from "../setup/factories";
+import { inviteAgentAction, setAgentStatusAction } from "@/lib/actions/agents";
+import { clearCookies } from "../setup/nextMocks";
+
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+
+const LAST_ADMIN = /at least one active Administrator/;
+
+let sent: OutgoingEmail[] = [];
+
+beforeEach(async () => {
+  await resetDb();
+  clearCookies();
+  sent = [];
+  setTransportForTests({ name: "recording", send: async (email) => void sent.push(email) });
+});
+afterEach(() => setTransportForTests(null));
+
+const auditActions = async () =>
+  (await db.select({ a: auditEvents.action }).from(auditEvents).orderBy(auditEvents.occurredAt)).map(
+    (r) => r.a,
+  );
+
+describe("inviteAgent", () => {
+  test("writes user, invitation and email together", async () => {
+    const { org, admin } = await adminFixture();
+    const role = await roleOf(org.id, "agent");
+    const r = await inviteAgent(actorOf(admin), {
+      email: " Dan@Meridian.example ",
+      firstName: "Dan",
+      lastName: "K",
+      roleId: role.id,
+    });
+
+    const dan = await userById(r.userId);
+    expect(dan).toMatchObject({
+      status: "invited",
+      kind: "agent",
+      passwordHash: null,
+      roleId: role.id,
+      email: "dan@meridian.example",
+      organizationId: org.id,
+    });
+    expect((await notifications()).map((n) => [n.kind, n.toEmail])).toEqual([
+      ["user_invitation", "dan@meridian.example"],
+    ]);
+
+    const [inv] = await db.select().from(invitations).where(eq(invitations.userId, r.userId));
+    expect(inv).toMatchObject({ status: "pending", createdByUserId: admin.id, organizationId: org.id });
+    expect(r.invitationUrl).toMatch(new RegExp(`/invitations/${inv.token}$`));
+    expect(await auditActions()).toEqual(["agent.invited"]);
+    // dispatchSoon ran after commit: the invitation went out and the row is marked sent.
+    expect(sent.map((m) => m.to)).toEqual(["dan@meridian.example"]);
+    expect((await notifications())[0].status).toBe("sent");
+  });
+
+  test("a duplicate email in any case is refused, and nothing is written", async () => {
+    const { org, admin } = await adminFixture();
+    const role = await roleOf(org.id, "agent");
+    const input = { firstName: "Dan", lastName: "K", roleId: role.id };
+    await inviteAgent(actorOf(admin), { ...input, email: "dan@meridian.example" });
+
+    await expect(
+      inviteAgent(actorOf(admin), { ...input, email: " DAN@Meridian.example " }),
+    ).rejects.toThrow("Someone with that email already has an account.");
+    expect(await count(users)).toBe(2);
+    expect(await count(invitations)).toBe(1);
+    expect(await count(emailNotifications)).toBe(1);
+  });
+
+  test("a duplicate in another organization is refused too", async () => {
+    const { org, admin } = await adminFixture();
+    const other = await makeOrg("Kestrel");
+    await makeAgent(other.id, "agent", { email: "dan@meridian.example" });
+    await expect(
+      inviteAgent(actorOf(admin), {
+        email: "Dan@Meridian.example",
+        firstName: "Dan",
+        lastName: "K",
+        roleId: (await roleOf(org.id, "agent")).id,
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  test("a role from another organization is not found, and nothing is written", async () => {
+    const { admin } = await adminFixture();
+    const other = await makeOrg("Kestrel");
+    const before = await count(users);
+    await expect(
+      inviteAgent(actorOf(admin), {
+        email: "dan@meridian.example",
+        firstName: "Dan",
+        lastName: "K",
+        roleId: (await roleOf(other.id, "agent")).id,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(await count(users)).toBe(before);
+    expect(await count(invitations)).toBe(0);
+  });
+
+  test("an agent without admin.users cannot invite", async () => {
+    const { org } = await adminFixture();
+    const agent = await makeAgent(org.id, "agent");
+    await expect(
+      inviteAgent(actorOf(agent), {
+        email: "dan@meridian.example",
+        firstName: "Dan",
+        lastName: "K",
+        roleId: (await roleOf(org.id, "agent")).id,
+      }),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+    expect(await count(invitations)).toBe(0);
+  });
+});
+
+describe("tenant isolation: foreign ids are not found and change nothing", () => {
+  test("changeAgentRole with a role from another organization", async () => {
+    const { org, admin } = await adminFixture();
+    const other = await makeOrg("Kestrel");
+    const foreignRole = await roleOf(other.id, "agent");
+    const dan = await makeAgent(org.id, "agent");
+    await expect(
+      changeAgentRole(actorOf(admin), dan.id, foreignRole.id),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect((await userById(dan.id)).roleId).toBe(dan.roleId);
+  });
+
+  test("every service refuses a user from another organization", async () => {
+    const { org, admin } = await adminFixture();
+    const other = await makeOrg("Kestrel");
+    const victim = await makeAgent(other.id, "agent", { mfaEnabled: true, mfaSecret: "s" });
+    const invitedVictim = await makeAgent(other.id, "agent", {
+      status: "invited",
+      passwordHash: null,
+    });
+    await db.insert(sessions).values({
+      id: "victim-session",
+      userId: victim.id,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    const actor = actorOf(admin);
+    const myRole = (await roleOf(org.id, "agent")).id;
+
+    await expect(setAgentStatus(actor, victim.id, "disabled")).rejects.toBeInstanceOf(NotFoundError);
+    await expect(changeAgentRole(actor, victim.id, myRole)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(issueAdminPasswordReset(actor, victim.id)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(resetAgentMfa(actor, victim.id)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(resendInvitation(actor, invitedVictim.id)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(withdrawInvitation(actor, invitedVictim.id)).rejects.toBeInstanceOf(NotFoundError);
+
+    expect(await userById(victim.id)).toMatchObject({
+      status: "active",
+      roleId: victim.roleId,
+      mfaEnabled: true,
+      mfaSecret: "s",
+    });
+    expect(await userById(invitedVictim.id)).toBeDefined();
+    expect(await count(passwordResets)).toBe(0);
+    expect(await count(sessions, eq(sessions.userId, victim.id))).toBe(1);
+    expect(await count(auditEvents)).toBe(0);
+  });
+
+  test("a requester in the same organization is not an agent to manage", async () => {
+    const { admin, org } = await adminFixture();
+    const requester = await makeRequester(org.id);
+    await expect(setAgentStatus(actorOf(admin), requester.id, "disabled")).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    await expect(issueAdminPasswordReset(actorOf(admin), requester.id)).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    expect((await userById(requester.id)).status).toBe("active");
+  });
+});
+
+describe("last active Administrator", () => {
+  test("cannot be disabled or demoted", async () => {
+    const { org, admin } = await adminFixture();
+    // A second admin who is merely invited does not count.
+    await makeAgent(org.id, "administrator", { status: "invited", passwordHash: null });
+    const other = await makeAgent(org.id, "agent");
+    // The actor is someone else with the permission, so only the guard can refuse.
+    const actor = actorOf(other, actorOf(admin).permissions);
+
+    await expect(setAgentStatus(actor, admin.id, "disabled")).rejects.toThrow(LAST_ADMIN);
+    await expect(
+      changeAgentRole(actor, admin.id, (await roleOf(org.id, "agent")).id),
+    ).rejects.toThrow(LAST_ADMIN);
+    expect(await userById(admin.id)).toMatchObject({ status: "active", roleId: admin.roleId });
+  });
+
+  test("an administrator cannot disable themselves", async () => {
+    const { org, admin } = await adminFixture();
+    await makeAgent(org.id, "administrator");
+    await expect(setAgentStatus(actorOf(admin), admin.id, "disabled")).rejects.toThrow(
+      "You can't disable your own account.",
+    );
+  });
+
+  test("the only invited Administrator cannot be withdrawn", async () => {
+    const created = await createOrganizationWithAdmin({
+      name: "Meridian",
+      admin: { email: "alice@meridian.example", firstName: "Alice", lastName: "A" },
+    });
+    const helper = await makeAgent(created.organizationId, "administrator", { mfaEnabled: true });
+    // Helper is an active admin, so Alice may be withdrawn...
+    await withdrawInvitation(actorOf(helper), created.adminUserId);
+    expect(await count(users, eq(users.id, created.adminUserId))).toBe(0);
+
+    // ...but with nobody active, the only pending Administrator stays.
+    const again = await createOrganizationWithAdmin({
+      name: "Kestrel",
+      admin: { email: "bob@kestrel.example", firstName: "Bob", lastName: "B" },
+    });
+    const agent = await makeAgent(again.organizationId, "agent");
+    await expect(
+      withdrawInvitation(actorOf(agent, ["admin.users"]), again.adminUserId),
+    ).rejects.toThrow(LAST_ADMIN);
+    expect(await count(users, eq(users.id, again.adminUserId))).toBe(1);
+  });
+
+  test("with a second active Administrator, the first can be demoted or disabled", async () => {
+    const { org, admin } = await adminFixture();
+    const second = await makeAgent(org.id, "administrator");
+    await changeAgentRole(actorOf(second), admin.id, (await roleOf(org.id, "agent")).id);
+    expect((await userById(admin.id)).roleId).not.toBe(admin.roleId);
+    await expect(setAgentStatus(actorOf(admin, actorOf(second).permissions), second.id, "disabled")).rejects.toThrow(
+      LAST_ADMIN,
+    );
+  });
+
+  test("two concurrent demotions cannot both pass", async () => {
+    const { org, admin: a } = await adminFixture();
+    const b = await makeAgent(org.id, "administrator");
+    const agentRole = (await roleOf(org.id, "agent")).id;
+    const results = await Promise.allSettled([
+      changeAgentRole(actorOf(b), a.id, agentRole),
+      changeAgentRole(actorOf(a), b.id, agentRole),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(ConflictError);
+    expect(rejected.reason.message).toMatch(LAST_ADMIN);
+  });
+
+  test("two concurrent disables cannot both pass", async () => {
+    const { org, admin: a } = await adminFixture();
+    const b = await makeAgent(org.id, "administrator");
+    const results = await Promise.allSettled([
+      setAgentStatus(actorOf(b), a.id, "disabled"),
+      setAgentStatus(actorOf(a), b.id, "disabled"),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(await count(users, and(eq(users.organizationId, org.id), eq(users.status, "active")))).toBe(1);
+  });
+
+  test("assertKeepsAnAdministrator is a no-op for someone who is not an administrator", async () => {
+    const { org } = await adminFixture();
+    const agent = await makeAgent(org.id, "agent");
+    await expect(
+      db.transaction((tx) => assertKeepsAnAdministrator(tx, org.id, { userId: agent.id })),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("setAgentStatus", () => {
+  test("disabling revokes sessions and spends live password resets, and audits", async () => {
+    const { org, admin } = await adminFixture();
+    const second = await makeAgent(org.id, "administrator");
+    const dan = await makeAgent(org.id, "agent");
+    await db.insert(sessions).values({
+      id: "dan-session",
+      userId: dan.id,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    await issuePasswordReset(dan.id, admin.id, 60);
+    expect(await count(passwordResets, isNull(passwordResets.usedAt))).toBe(1);
+
+    await setAgentStatus(actorOf(second), dan.id, "disabled");
+
+    expect((await userById(dan.id)).status).toBe("disabled");
+    expect(await count(sessions, eq(sessions.userId, dan.id))).toBe(0);
+    expect(await count(passwordResets, isNull(passwordResets.usedAt))).toBe(0);
+    expect(await auditActions()).toContain("agent.disabled");
+  });
+
+  test("enabling goes only from disabled to active", async () => {
+    const { org, admin } = await adminFixture();
+    const dan = await makeAgent(org.id, "agent", { status: "disabled" });
+    const eve = await makeAgent(org.id, "agent");
+    await setAgentStatus(actorOf(admin), dan.id, "active");
+    expect((await userById(dan.id)).status).toBe("active");
+    await expect(setAgentStatus(actorOf(admin), eve.id, "active")).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+    const invited = await makeAgent(org.id, "agent", { status: "invited", passwordHash: null });
+    await expect(setAgentStatus(actorOf(admin), invited.id, "active")).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+    await expect(setAgentStatus(actorOf(admin), invited.id, "disabled")).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+    expect(await auditActions()).toEqual(["agent.enabled"]);
+  });
+
+});
+
+describe("changeAgentRole", () => {
+  test("changes the role and audits from and to", async () => {
+    const { org, admin } = await adminFixture();
+    const dan = await makeAgent(org.id, "agent");
+    const adminRole = await roleOf(org.id, "administrator");
+    await changeAgentRole(actorOf(admin), dan.id, adminRole.id);
+    expect((await userById(dan.id)).roleId).toBe(adminRole.id);
+    const [event] = await db.select().from(auditEvents).where(eq(auditEvents.action, "agent.role_changed"));
+    expect(event.metadata).toEqual({ from: "Agent", to: "Administrator" });
+  });
+});
+
+describe("invitations: resend and withdraw", () => {
+  async function invited() {
+    const { org, admin } = await adminFixture();
+    const r = await inviteAgent(actorOf(admin), {
+      email: "dan@meridian.example",
+      firstName: "Dan",
+      lastName: "K",
+      roleId: (await roleOf(org.id, "agent")).id,
+    });
+    return { org, admin, ...r };
+  }
+
+  test("resend revokes the old token and issues a new one with a new email", async () => {
+    const { admin, userId, invitationUrl } = await invited();
+    const oldToken = invitationUrl.split("/").pop()!;
+    await resendInvitation(actorOf(admin), userId);
+
+    const rows = await db.select().from(invitations).where(eq(invitations.userId, userId));
+    expect(rows.find((r) => r.token === oldToken)?.status).toBe("revoked");
+    const fresh = rows.filter((r) => r.status === "pending");
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0].token).not.toBe(oldToken);
+    expect((await notifications()).map((n) => n.kind)).toEqual(["user_invitation", "user_invitation"]);
+    expect(await auditActions()).toEqual(["agent.invited", "agent.invitation_resent"]);
+  });
+
+  test("resend is only for invited users", async () => {
+    const { org, admin } = await adminFixture();
+    const active = await makeAgent(org.id, "agent");
+    await expect(resendInvitation(actorOf(admin), active.id)).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  test("withdraw deletes the user and the invitation, and audits the email", async () => {
+    const { admin, userId } = await invited();
+    await withdrawInvitation(actorOf(admin), userId);
+    expect(await count(users, eq(users.id, userId))).toBe(0);
+    expect(await count(invitations)).toBe(0);
+    const [event] = await db.select().from(auditEvents).where(eq(auditEvents.action, "agent.invitation_withdrawn"));
+    expect(event.metadata).toEqual({ email: "dan@meridian.example" });
+  });
+
+  test("withdraw refuses someone who has been activated", async () => {
+    const { org, admin } = await adminFixture();
+    const active = await makeAgent(org.id, "agent");
+    await expect(withdrawInvitation(actorOf(admin), active.id)).rejects.toBeInstanceOf(ConflictError);
+    expect(await count(users, eq(users.id, active.id))).toBe(1);
+  });
+});
+
+describe("issueAdminPasswordReset", () => {
+  test("returns a url for an active agent and audits", async () => {
+    const { org, admin } = await adminFixture();
+    const dan = await makeAgent(org.id, "agent");
+    const { url } = await issueAdminPasswordReset(actorOf(admin), dan.id);
+    expect(url).toMatch(/\/reset\/.+/);
+    expect(await count(passwordResets)).toBe(1);
+    expect(await auditActions()).toEqual(["auth.password_reset_issued"]);
+  });
+
+  test("refuses a target who is not active", async () => {
+    const { org, admin } = await adminFixture();
+    const disabled = await makeAgent(org.id, "agent", { status: "disabled" });
+    const invited = await makeAgent(org.id, "agent", { status: "invited", passwordHash: null });
+    await expect(issueAdminPasswordReset(actorOf(admin), disabled.id)).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+    await expect(issueAdminPasswordReset(actorOf(admin), invited.id)).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+    expect(await count(passwordResets)).toBe(0);
+  });
+
+  test("requires admin.users", async () => {
+    const { org } = await adminFixture();
+    const dan = await makeAgent(org.id, "agent");
+    await expect(issueAdminPasswordReset(actorOf(dan), dan.id)).rejects.toBeInstanceOf(
+      AuthorizationError,
+    );
+  });
+});
+
+describe("resetAgentMfa", () => {
+  test("clears the secret, codes and challenges, revokes sessions, audits", async () => {
+    const { org, admin } = await adminFixture();
+    const dan = await makeAgent(org.id, "agent", {
+      mfaEnabled: true,
+      mfaSecret: "secret",
+      mfaEnrolledAt: new Date(),
+      mfaLastUsedStep: 5,
+    });
+    await db.insert(mfaRecoveryCodes).values({ userId: dan.id, codeHash: "h" });
+    await db.insert(mfaChallenges).values({
+      id: "c1",
+      userId: dan.id,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await db.insert(sessions).values({
+      id: "s1",
+      userId: dan.id,
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+
+    await resetAgentMfa(actorOf(admin), dan.id);
+
+    expect(await userById(dan.id)).toMatchObject({
+      mfaEnabled: false,
+      mfaSecret: null,
+      mfaEnrolledAt: null,
+      mfaLastUsedStep: null,
+    });
+    expect(await count(mfaRecoveryCodes)).toBe(0);
+    expect(await count(mfaChallenges)).toBe(0);
+    expect(await count(sessions, eq(sessions.userId, dan.id))).toBe(0);
+    expect(await auditActions()).toEqual(["auth.mfa_reset"]);
+  });
+});
+
+describe("listAgents", () => {
+  test("is scoped to the organization, filters, and pages", async () => {
+    const { org, admin } = await adminFixture();
+    const other = await makeOrg("Kestrel");
+    await makeAgent(other.id, "agent", { firstName: "Zed" });
+    await makeRequester(org.id);
+    await makeAgent(org.id, "agent", { firstName: "Dana", lastName: "Fox", email: "dana@m.example" });
+    await makeAgent(org.id, "agent", { status: "disabled", firstName: "Dora" });
+
+    const all = await listAgents(org.id, {}, 1);
+    expect(all).toMatchObject({ total: 3, page: 1, pageSize: 50 });
+    expect(all.rows.every((r) => typeof r.email === "string")).toBe(true);
+
+    expect((await listAgents(org.id, { q: "FOX" }, 1)).rows.map((r) => r.firstName)).toEqual(["Dana"]);
+    expect((await listAgents(org.id, { q: "dana@m" }, 1)).total).toBe(1);
+    expect((await listAgents(org.id, { q: "%" }, 1)).total).toBe(0);
+    expect((await listAgents(org.id, { status: "disabled" }, 1)).rows.map((r) => r.firstName)).toEqual(["Dora"]);
+    expect((await listAgents(org.id, { roleId: admin.roleId! }, 1)).total).toBe(1);
+    expect((await listAgents(org.id, { status: "nonsense" }, 1)).total).toBe(3);
+    expect((await listAgents(org.id, {}, 2)).rows).toEqual([]);
+  });
+});
+
+describe("thin actions", () => {
+  async function signedIn(roleKey: string, mfa = true) {
+    const org = await makeOrg();
+    const user = await makeAgent(org.id, roleKey, { mfaEnabled: mfa });
+    clearCookies();
+    await createSession(user.id);
+    return { org, user };
+  }
+
+  test("an agent without admin.users gets a message, and nothing changes", async () => {
+    const { org } = await signedIn("agent");
+    const fd = new FormData();
+    fd.set("email", "dan@meridian.example");
+    fd.set("firstName", "Dan");
+    fd.set("lastName", "K");
+    fd.set("roleId", (await roleOf(org.id, "agent")).id);
+    const state = await inviteAgentAction({}, fd);
+    expect(state.error).toMatch(/permission/i);
+    expect(await count(invitations)).toBe(0);
+  });
+
+  test("a conflict becomes an ActionState message", async () => {
+    const { user } = await signedIn("administrator");
+    const fd = new FormData();
+    fd.set("userId", user.id);
+    fd.set("status", "disabled");
+    const state = await setAgentStatusAction({}, fd);
+    expect(state.error).toBe("You can't disable your own account.");
+  });
+
+  test("a foreign id becomes a message, not a crash", async () => {
+    await signedIn("administrator");
+    const stranger = await makeAgent((await makeOrg("Kestrel")).id, "agent");
+    const fd = new FormData();
+    fd.set("userId", stranger.id);
+    fd.set("status", "disabled");
+    const state = await setAgentStatusAction({}, fd);
+    expect(state.error).toBeTruthy();
+    expect((await userById(stranger.id)).status).toBe("active");
+  });
+
+  test("invalid input is reported as field errors", async () => {
+    await signedIn("administrator");
+    const fd = new FormData();
+    fd.set("email", "not-an-email");
+    fd.set("firstName", "");
+    fd.set("lastName", "K");
+    fd.set("roleId", "nope");
+    const state = await inviteAgentAction({}, fd);
+    expect(state.fieldErrors).toMatchObject({ email: expect.any(Array), firstName: expect.any(Array) });
+  });
+});
+

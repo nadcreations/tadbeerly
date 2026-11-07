@@ -37,17 +37,26 @@ export async function requireUser(): Promise<SessionUser> {
  * A missing pathname header fails closed (the gate then applies).
  */
 export async function requireAgent(): Promise<SessionUser> {
+  return agentGatedAt((await headers()).get("x-tb-pathname") ?? "");
+}
+
+async function agentGatedAt(pathname: string): Promise<SessionUser> {
   const user = await requireUser();
   if (user.kind !== "agent") redirect("/portal");
-  const pathname = (await headers()).get("x-tb-pathname") ?? "";
   const gate = mfaGateRedirect(user, pathname);
   if (gate) redirect(gate);
   return user;
 }
 
-/** For server actions: throws AuthorizationError without the permission. */
+/**
+ * For server actions: throws AuthorizationError without the permission.
+ *
+ * The MFA gate applies unconditionally here (an empty pathname, ignoring
+ * x-tb-pathname): actions are never the /security page, so nothing a request
+ * header says can exempt them.
+ */
 export async function requirePermission(p: Permission): Promise<SessionUser> {
-  const user = await requireAgent();
+  const user = await agentGatedAt("");
   if (!can(user, p)) throw new AuthorizationError();
   return user;
 }

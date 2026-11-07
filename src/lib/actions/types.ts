@@ -1,6 +1,8 @@
 export type ActionState = {
   error?: string;
   success?: string;
+  /** A link the administrator should copy now, such as a password reset URL. */
+  link?: string;
   fieldErrors?: Record<string, string[]>;
 };
 

@@ -1,7 +1,9 @@
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { db } from "@/db";
-import { organizations, roles, users } from "@/db/schema";
+import { emailNotifications, organizations, roles, users } from "@/db/schema";
+import type { Actor } from "@/lib/authz";
+import type { Permission } from "@/lib/permissions";
 import { cloneRoleTemplates } from "@/lib/organizations";
 import { hashPassword } from "@/lib/password";
 import { allTableNames } from "./db";
@@ -63,6 +65,7 @@ export async function makeAgent(
       ...overrides,
     })
     .returning();
+  permissionsByUser.set(user.id, (role.permissions ?? []) as Permission[]);
   return user;
 }
 
@@ -107,4 +110,39 @@ export async function count(table: PgTable, where?: SQL): Promise<number> {
     .from(table)
     .where(where);
   return row.n;
+}
+
+/* ---------------------------- Task 12 helpers ---------------------------- */
+
+const permissionsByUser = new Map<string, Permission[]>();
+
+/**
+ * An organization with one active, MFA-enrolled Administrator, so calls behind
+ * the MFA gate work without an enrolment dance.
+ */
+export async function adminFixture(orgName?: string) {
+  const org = await makeOrg(orgName);
+  const admin = await makeAgent(org.id, "administrator", { mfaEnabled: true });
+  return { org, admin };
+}
+
+/**
+ * The Actor a service expects, for a user made by makeAgent. Permissions are
+ * those of the role the user was created with; pass `permissions` to override.
+ */
+export function actorOf(
+  user: { id: string; organizationId: string },
+  permissions?: Permission[],
+): Actor {
+  const resolved = permissions ?? permissionsByUser.get(user.id);
+  if (!resolved) throw new Error("actorOf: unknown user; pass permissions explicitly");
+  return { id: user.id, organizationId: user.organizationId, permissions: resolved };
+}
+
+/** Every queued email, oldest first. */
+export async function notifications() {
+  return db
+    .select()
+    .from(emailNotifications)
+    .orderBy(emailNotifications.createdAt, emailNotifications.id);
 }

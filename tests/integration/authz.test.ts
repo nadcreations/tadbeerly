@@ -40,6 +40,18 @@ describe("MFA gate in requireAgent", () => {
     expect((await requireUser()).id).toBe(admin.id);
   });
 
+  test("requirePermission gates even when the pathname header says /security", async () => {
+    // It serves actions only, which are never the /security page; a spoofable
+    // or stale header must not open the gate for them.
+    const org = await makeOrg();
+    const admin = await makeAgent(org.id, "administrator");
+    await createSession(admin.id);
+    setHeaders({ "x-tb-pathname": "/security" });
+    await expect(requirePermission("admin.users")).rejects.toMatchObject(redirectTo("/security"));
+    // The page-level checks still let the security page itself through.
+    expect((await requireAgent()).id).toBe(admin.id);
+  });
+
   test("an enrolled Administrator is not redirected", async () => {
     const org = await makeOrg();
     const admin = await makeAgent(org.id, "administrator", { mfaEnabled: true });

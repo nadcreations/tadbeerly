@@ -16,7 +16,7 @@ import {
 import { fieldErrorsFrom, type ActionState } from "./types";
 
 const requestSchema = z.object({
-  email: z.string().trim().toLowerCase().email("Enter a valid email address."),
+  email: z.string().trim().toLowerCase().max(254, "Enter a valid email address.").email("Enter a valid email address."),
 });
 
 /**
@@ -36,10 +36,10 @@ export async function requestReset(
   after(async () => {
     try {
       await requestPasswordReset(email);
+      await dispatchSoon();
     } catch (error) {
       console.error("[password-reset] request failed", error);
     }
-    await dispatchSoon();
   });
 
   return {
