@@ -29,12 +29,12 @@ export const PERMISSION_GROUPS: {
       {
         key: PERMISSIONS.ADMIN_USERS,
         label: "Manage users",
-        description: "Invite, edit, disable and reset passwords for people in the organization.",
+        description: "Invite agents, change their roles, disable and enable their accounts, and reset their passwords and two-step verification.",
       },
       {
         key: PERMISSIONS.ADMIN_ROLES,
         label: "Manage roles",
-        description: "Create, edit and delete roles and choose what each role may do.",
+        description: "Create roles from existing ones and choose what each role may do.",
       },
       {
         key: PERMISSIONS.ADMIN_CONFIG,

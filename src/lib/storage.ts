@@ -8,14 +8,14 @@ import { netlifyBlobsReachable } from "@/lib/runtime";
  *
  * Three backends, chosen once at startup:
  *
- *  - **SharePoint**, when documents must live under an organisation's own
+ *  - **SharePoint**, when files must live under an organization's own
  *    retention, eDiscovery and backup policy. The bytes sit in a document
- *    library; who may read them stays with Tadbeerly, because an external user
- *    with no SharePoint account still has to open what was issued to them.
+ *    library; who may read them stays with Tadbeerly, because a requester with
+ *    no SharePoint account still has to open the attachments on their request.
  *  - **Netlify Blobs**, for anything running on Netlify. Serverless functions
  *    get a read-only filesystem with an ephemeral /tmp, so a file written to
  *    disk is gone by the next request — an upload would appear to succeed and
- *    then vanish, which for a document register is worse than refusing it.
+ *    then vanish, which for a ticket attachment is worse than refusing it.
  *  - **Local disk**, for development and for anywhere self-hosted. It needs no
  *    external service, so a clone of this repository runs with a database and
  *    nothing else.
@@ -160,9 +160,10 @@ export type PutOptions = {
   /**
    * What to call the file, without its extension. Omitted, a UUID is used.
    *
-   * Anything passed here has been through `safeSegment`; this function does not
-   * sanitise, because a caller that forgot would otherwise be silently rescued
-   * and the next one would forget too.
+   * Must be server-chosen and already safe as a path segment (no slashes, no
+   * `..`): this function does not sanitise it, because a caller that forgot
+   * would otherwise be silently rescued and the next one would forget too.
+   * pathForKey still refuses any key that resolves outside the storage root.
    */
   name?: string;
   /**

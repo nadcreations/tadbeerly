@@ -5,15 +5,14 @@
  * the transaction commits. On a long-running server that is almost always
  * enough. On a serverless platform it is not: the function can be frozen the
  * moment the response is written, so a send that takes a second too long is
- * abandoned half-done — which is exactly what happened here, a row left
- * `pending` with one attempt and `Timeout` against it, and nothing to notice.
+ * abandoned half-done: the row stays `pending` with an attempt counted and
+ * nothing would ever retry it.
  *
  * `POST /api/cron/notifications` exists to catch that, and to run the
  * scheduled sweeps (SLA checks arrive in a later milestone), which have no
- * triggering action at all. It was documented as something
- * to point a scheduler at, and nothing was pointed at it. This is that
- * scheduler, living in the repository so it deploys with the code rather than
- * being a setting somebody has to remember.
+ * triggering action at all. This is the scheduler that calls it, living in the
+ * repository so it deploys with the code rather than being a setting somebody
+ * has to remember.
  *
  * It calls the endpoint over HTTP rather than importing the dispatcher: this
  * runs as a Netlify function, the dispatcher runs inside Next, and they are

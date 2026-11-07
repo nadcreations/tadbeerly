@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
-import { loadEnv, requireEnv } from "@/lib/env";
+import { databaseUrl, loadEnv } from "@/lib/env";
 import { isServerlessRuntime } from "@/lib/runtime";
 
 /**
@@ -22,20 +22,6 @@ const globalForDb = globalThis as unknown as {
   __tbClient?: ReturnType<typeof postgres>;
   __tbDb?: Database;
 };
-
-function connectionString(): string {
-  /*
-   * Netlify's Neon extension provisions a database and exposes it under its
-   * own name. Reading that as a fallback means a deployment using the
-   * extension works without anyone copying the URL into a second variable —
-   * but DATABASE_URL still wins, so an explicit setting is never quietly
-   * overridden.
-   */
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-  if (process.env.NETLIFY_DATABASE_URL) return process.env.NETLIFY_DATABASE_URL;
-  // Throws naming the variable and how to set it.
-  return requireEnv("DATABASE_URL");
-}
 
 type Env = Record<string, string | undefined>;
 
@@ -75,7 +61,8 @@ function connect(): Database {
   if (!client) {
     const max = resolvePoolMax();
     const serverless = isServerlessRuntime();
-    client = postgres(connectionString(), {
+    // DATABASE_URL, falling back to Netlify DB's NETLIFY_DATABASE_URL.
+    client = postgres(databaseUrl(), {
       max,
       /*
        * Neon closes idle connections, and a serverless instance is idle

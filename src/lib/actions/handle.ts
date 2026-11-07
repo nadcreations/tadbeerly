@@ -7,11 +7,14 @@ import type { ActionState } from "./types";
  * Lives outside the "use server" files: only actions belong there.
  */
 export function serviceErrorState(error: unknown): ActionState {
-  if (error instanceof ConflictError || error instanceof AuthorizationError) {
+  // Services write each message for the person reading it, NotFoundError's
+  // included ("That role could not be found."), so it is shown as written.
+  if (
+    error instanceof ConflictError ||
+    error instanceof AuthorizationError ||
+    error instanceof NotFoundError
+  ) {
     return { error: error.message };
-  }
-  if (error instanceof NotFoundError) {
-    return { error: "That person or role could not be found. Refresh and try again." };
   }
   throw error;
 }

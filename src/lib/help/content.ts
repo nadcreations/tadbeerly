@@ -186,7 +186,7 @@ export const HELP_TOPICS: HelpTopic[] = [
           ["Resend invitation", "Invited", "Replaces the earlier link with a new one and emails it."],
           ["Withdraw", "Invited", "Cancels the invitation and removes the unactivated account."],
           ["Reset password", "Active", "Issues a password reset link valid for 24 hours, shown once."],
-          ["Reset 2-step", "Active", "Clears the person's two-step verification and signs them out. They set it up again at next sign-in."],
+          ["Reset 2-step", "Active, with two-step verification on", "Turns off their two-step verification and signs them out. They'll be asked to set it up again only if your organization requires it or they're an Administrator."],
           ["Disable", "Active", "Ends the person's access immediately and signs them out. Not available on your own row."],
           ["Enable", "Disabled", "Restores access."],
         ],
@@ -244,8 +244,8 @@ export const HELP_TOPICS: HelpTopic[] = [
         kind: "table",
         head: ["Permission", "Lets a person"],
         rows: [
-          ["Manage users", "Invite, edit, disable and reset passwords for people in the organization."],
-          ["Manage roles", "Create, edit and delete roles and choose what each role may do."],
+          ["Manage users", "Invite agents, change their roles, disable and enable their accounts, and reset their passwords and two-step verification."],
+          ["Manage roles", "Create roles from existing ones and choose what each role may do."],
           ["Manage configuration", "Change organization settings and security policy."],
           ["View audit trail", "Read the record of who changed what and when."],
         ],
@@ -443,7 +443,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       },
       {
         kind: "para",
-        text: "Ask an administrator to open Admin, then Agents, and select Reset 2-step on your row. You are signed out and set it up again at your next sign-in.",
+        text: "Ask an administrator to open Admin, then Agents, and select Reset 2-step on your row (if you are an Administrator, ask another Administrator). That turns off your two-step verification and signs you out. You'll be asked to set it up again only if your organization requires it or you're an Administrator; otherwise turn it back on yourself from the Security page.",
       },
     ],
   },

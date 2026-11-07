@@ -42,13 +42,6 @@ function Icon({ name }: { name: string }) {
           <path d="M9 1.5V5.5H13" />
         </svg>
       );
-    case "transmittals":
-      return (
-        <svg {...common}>
-          <path d="M14 2 7 9" />
-          <path d="M14 2l-4.5 12-2.5-5-5-2.5Z" />
-        </svg>
-      );
     case "mail":
       return (
         <svg {...common}>
@@ -117,7 +110,6 @@ const ICON_TONES: Record<string, { idle: string; active: string }> = {
   dashboard: { idle: "bg-brand-50 text-brand-600", active: "bg-brand-100 text-brand-700" },
   overview: { idle: "bg-ink-100 text-ink-500", active: "bg-ink-200 text-ink-700" },
   documents: { idle: "bg-brand-100 text-brand-700", active: "bg-brand-200 text-brand-800" },
-  transmittals: { idle: "bg-brand-50 text-brand-800", active: "bg-brand-200 text-brand-900" },
   mail: { idle: "bg-amber-50 text-amber-600", active: "bg-amber-100 text-amber-700" },
   workflows: { idle: "bg-orange-50 text-orange-600", active: "bg-orange-100 text-orange-700" },
   organizations: { idle: "bg-stone-100 text-stone-600", active: "bg-stone-200 text-stone-700" },

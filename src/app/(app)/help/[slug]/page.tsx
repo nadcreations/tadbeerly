@@ -10,9 +10,9 @@ import {
 import { HelpBlocks } from "@/components/HelpBlocks";
 import { Badge, Card, TitleBlock } from "@/components/ui";
 
-export async function generateStaticParams() {
-  return HELP_TOPICS.map((topic) => ({ slug: topic.slug }));
-}
+// Rendered per request: requireAgent reads the session, so there is nothing to
+// prerender (and generateStaticParams would only pretend otherwise).
+export const dynamic = "force-dynamic";
 
 export async function generateMetadata({
   params,

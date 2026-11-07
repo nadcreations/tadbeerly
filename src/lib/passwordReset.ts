@@ -170,7 +170,8 @@ export async function requestPasswordReset(email: string): Promise<void> {
     .innerJoin(organizations, eq(organizations.id, users.organizationId))
     .where(
       and(
-        eq(users.email, normalised),
+        // lower(), like every other email lookup: it is what the unique index is on.
+        sql`lower(${users.email}) = ${normalised}`,
         eq(users.status, "active"),
         eq(organizations.status, "active"),
       ),

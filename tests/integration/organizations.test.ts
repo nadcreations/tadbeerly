@@ -1,13 +1,41 @@
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, test } from "vitest";
 import { db } from "@/db";
-import { invitations, roles } from "@/db/schema";
+import { invitations, organizations, roles, users } from "@/db/schema";
 import { syncRoles } from "@/db/syncRoles";
 import { createOrganizationWithAdmin } from "@/lib/organizations";
+import {
+  PASSWORD_TOO_LONG_MESSAGE,
+  PASSWORD_TOO_SHORT_MESSAGE,
+  PasswordResetError,
+} from "@/lib/passwordReset";
 import { ALL_PERMISSIONS } from "@/lib/permissions";
 import { count, resetDb, roleOf, userById } from "../setup/factories";
 
 beforeEach(resetDb);
+
+describe("createOrganizationWithAdmin password", () => {
+  const withPassword = (password: string) =>
+    createOrganizationWithAdmin({
+      name: "Meridian",
+      admin: { email: "alice@meridian.example", firstName: "Alice", lastName: "Ng", password },
+    });
+
+  test("a given password follows the shared rule, and nothing is created", async () => {
+    await expect(withPassword("short")).rejects.toThrow(
+      new PasswordResetError(PASSWORD_TOO_SHORT_MESSAGE, "password"),
+    );
+    await expect(withPassword("x".repeat(201))).rejects.toThrow(PASSWORD_TOO_LONG_MESSAGE);
+    await expect(withPassword("x".repeat(201))).rejects.toBeInstanceOf(PasswordResetError);
+    expect(await count(organizations)).toBe(0);
+    expect(await count(users)).toBe(0);
+  });
+
+  test("a valid password creates an active administrator", async () => {
+    const created = await withPassword("Password123!");
+    expect((await userById(created.adminUserId)).status).toBe("active");
+  });
+});
 
 const rolesOf = (orgId: string) =>
   db.select().from(roles).where(eq(roles.organizationId, orgId));

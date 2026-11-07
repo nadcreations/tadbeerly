@@ -767,7 +767,8 @@ describe("thin actions", () => {
     fd.set("userId", stranger.id);
     fd.set("status", "disabled");
     const state = await setAgentStatusAction({}, fd);
-    expect(state.error).toBeTruthy();
+    // The service's own message: the same as for an id that exists nowhere.
+    expect(state.error).toBe("That person could not be found.");
     expect((await userById(stranger.id)).status).toBe("active");
   });
 

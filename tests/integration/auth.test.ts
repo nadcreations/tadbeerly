@@ -180,6 +180,15 @@ describe("login action", () => {
     expect(state.fieldErrors?.email).toBeTruthy();
     expect(state.fieldErrors?.password).toBeTruthy();
   });
+
+  test("a password over 200 characters is a field error and is never hashed", async () => {
+    const org = await makeOrg();
+    await makeAgent(org.id, "agent", { email: "a@m.example" });
+    const state = await login({}, form("a@m.example", "x".repeat(201)));
+    expect(state.fieldErrors?.password).toBeTruthy();
+    // Refused before authentication: no failure was counted.
+    expect(await count(rateLimits)).toBe(0);
+  });
 });
 
 describe("logout action", () => {

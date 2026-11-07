@@ -7,13 +7,19 @@ import { authenticate } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { fullName, normaliseEmail } from "@/lib/format";
 import { createChallenge } from "@/lib/mfa";
+import { PASSWORD_MAX_LENGTH, PASSWORD_TOO_LONG_MESSAGE } from "@/lib/passwordReset";
 import { completeSignIn } from "@/lib/signIn";
 import { destroySession, getCurrentUser } from "@/lib/session";
 import { fieldErrorsFrom, type ActionState } from "./types";
 
 const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email address."),
-  password: z.string().min(1, "Enter your password."),
+  // No password can be set longer than this, and scrypt should not be handed
+  // an arbitrarily large input by an anonymous form.
+  password: z
+    .string()
+    .min(1, "Enter your password.")
+    .max(PASSWORD_MAX_LENGTH, PASSWORD_TOO_LONG_MESSAGE),
 });
 
 export async function login(_prev: ActionState, formData: FormData): Promise<ActionState> {

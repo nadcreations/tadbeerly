@@ -72,6 +72,14 @@ describe("requestPasswordReset", () => {
     expect(audit.action).toBe("auth.password_reset_requested");
   });
 
+  test("a stored address in another case still matches, as every other lookup does", async () => {
+    const org = await makeOrg();
+    // Written by hand or before normalisation: the unique index is on lower(email).
+    await makeAgent(org.id, "agent", { email: "Mixed@Case.example" });
+    await requestPasswordReset("mixed@case.example");
+    expect(await count(emailNotifications)).toBe(1);
+  });
+
   test("invited, disabled and inactive-organization accounts get nothing", async () => {
     const org = await makeOrg();
     await makeAgent(org.id, "agent", { email: "inv@m.example", status: "invited" });

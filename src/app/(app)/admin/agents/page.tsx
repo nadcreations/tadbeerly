@@ -184,13 +184,16 @@ export default async function AgentsPage({
                               >
                                 Reset password
                               </ActionButton>
-                              <ActionButton
-                                action={resetAgentMfaAction}
-                                fields={{ userId: row.id }}
-                                confirm={`Reset two-step verification for ${fullName(row)}? They are signed out and must set it up again.`}
-                              >
-                                Reset 2-step
-                              </ActionButton>
+                              {/* Only for someone who has two-step verification to reset. */}
+                              {row.mfaEnabled ? (
+                                <ActionButton
+                                  action={resetAgentMfaAction}
+                                  fields={{ userId: row.id }}
+                                  confirm={`Reset two-step verification for ${fullName(row)}? Turns off their two-step verification. They'll be asked to set it up again only if your organization requires it or they're an Administrator. They are also signed out.`}
+                                >
+                                  Reset 2-step
+                                </ActionButton>
+                              ) : null}
                               {isSelf ? null : (
                                 <ActionButton
                                   action={setAgentStatusAction}

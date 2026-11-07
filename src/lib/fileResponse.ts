@@ -7,6 +7,11 @@ import { dispositionFor, getFile } from "@/lib/storage";
  * The bytes are streamed by this application, because the response headers are
  * the security control: anything rendered in this origin must carry the sandbox
  * policy and the nosniff header. Permission is decided by the caller first.
+ *
+ * Call it only from a route whose last path segment is `download` or `preview`
+ * (STORED_FILE_ROUTE_SEGMENTS in next.config.ts). Anywhere else the site-wide
+ * Content-Security-Policy from next.config replaces the sandbox policy set
+ * here, because Next keeps a configured header over a route's own.
  */
 export async function serveStoredFile(options: {
   storageKey: string;

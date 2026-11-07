@@ -31,12 +31,30 @@ export function loadEnv(file = ".env.local"): void {
   }
 }
 
-export function requireEnv(key: string): string {
-  const value = process.env[key];
+export function requireEnv(
+  key: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const value = env[key];
   if (!value) {
     throw new Error(
       `Missing required environment variable ${key}. Copy .env.example to .env.local and fill it in.`,
     );
   }
   return value;
+}
+
+/**
+ * The database connection string, for the app and for migrations alike.
+ *
+ * Netlify's Neon extension provisions a database and exposes it under its own
+ * name. Reading that as a fallback means a deployment using the extension works
+ * without anyone copying the URL into a second variable, but DATABASE_URL still
+ * wins, so an explicit setting is never quietly overridden.
+ */
+export function databaseUrl(env: Record<string, string | undefined> = process.env): string {
+  if (env.DATABASE_URL) return env.DATABASE_URL;
+  if (env.NETLIFY_DATABASE_URL) return env.NETLIFY_DATABASE_URL;
+  // Throws naming the variable and how to set it.
+  return requireEnv("DATABASE_URL", env);
 }

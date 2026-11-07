@@ -332,7 +332,6 @@ requester portal are planned and not built. The milestone plan is in
 [`docs/superpowers/plans/2026-11-07-tadbeerly-project-plan.md`](docs/superpowers/plans/2026-11-07-tadbeerly-project-plan.md).
 Passkeys, SMS codes and trusted devices are not available either.
 
-
 ## Deployment
 
 Target: Netlify, with the Netlify DB (Neon) extension. Next.js is auto-detected,
@@ -359,13 +358,26 @@ function runs), and logs the pool size it chose once, on the first query. Set
 | Variable | Value |
 | --- | --- |
 | `SESSION_SECRET` | `openssl rand -hex 32` |
-| `MFA_ENCRYPTION_KEY` | `openssl rand -hex 32` (separate from the session secret) |
+| `MFA_ENCRYPTION_KEY` | `openssl rand -hex 32` (separate from the session secret). Set it **before the first enrolment** and keep it: see below. |
 | `CRON_SECRET` | `openssl rand -hex 32`. Production context only: leave it **unset** in deploy previews. |
 | `APP_URL` | The site's public URL, used for links in emails |
-| `EMAIL_TRANSPORT` | `console` until Graph is configured (emails then appear in the function logs) |
+| `EMAIL_TRANSPORT` | `console` until Graph is configured (emails then appear in the function logs; see below) |
 | `EMAIL_FROM`, `EMAIL_FROM_NAME` | Sender address and display name |
+| `GRAPH_MAIL_SENDER` | Only if the mailbox Graph sends from differs from `EMAIL_FROM` |
 | `STORAGE_BACKEND` | Leave unset: Netlify Blobs is detected on Netlify |
 | `DB_POOL_MAX` | Leave unset: one connection per function is detected on Netlify |
+
+> **`EMAIL_TRANSPORT=console` in production is for acceptance testing only.**
+> Password-reset and invitation emails never reach anyone, and the function
+> logs then contain live reset and invitation links that work for whoever reads
+> them. Switch to a real transport before real people use the site.
+
+> **Set `MFA_ENCRYPTION_KEY` once, before anyone enrols, and never rotate it
+> casually.** TOTP secrets are encrypted, and recovery codes keyed, with it (or
+> with `SESSION_SECRET` while it is unset). Changing it, adding it after starting
+> on the `SESSION_SECRET` fallback, or rotating `SESSION_SECRET` while it is
+> unset makes every TOTP secret and recovery code unreadable and locks out every
+> enrolled user.
 
 ### Release steps
 
@@ -384,7 +396,8 @@ function runs), and logs the pool size it chose once, on the first query. Set
 - The build fetches IBM Plex from Google Fonts. A transient failure there is
   cleared by redeploying.
 - Moving email off `console`: set `EMAIL_TRANSPORT=graph`, with `EMAIL_FROM` a
-  real mailbox, and the `GRAPH_*` variables (they fall back to the
+  real mailbox (or `GRAPH_MAIL_SENDER` naming the mailbox to send from, when it
+  differs), and the `GRAPH_*` credentials (they fall back to the
   `SHAREPOINT_*` ones). The Entra app registration needs the Microsoft Graph
   `Mail.Send` application permission with admin consent, ideally restricted by
   an Application Access Policy. Check it with `npm run email:graph-check`.

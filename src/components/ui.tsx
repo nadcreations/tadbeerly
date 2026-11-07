@@ -104,14 +104,13 @@ export type TitleBlockField = {
 };
 
 /**
- * The page header, borrowed from the one device everybody in this industry
- * already reads without thinking: the title block in the corner of a drawing.
+ * The page header, modelled on the title block in the corner of a technical
+ * drawing: one ruled strip that answers "what is this, and what state is it
+ * in?" before anything else.
  *
- * A drawing's title block answers "what is this, which revision, and is it
- * current?" in a single ruled strip. The same four or five answers are what
- * somebody opening a register, a transmittal or a workflow needs first, so the
- * header states them in the same form — small uppercase labels over values,
- * divided by hairlines.
+ * Opening a ticket, a role or a person, the first answers needed are the same
+ * few facts (its type, its status, its reference), so the header states them in
+ * that form: small uppercase labels over values, divided by hairlines.
  */
 export function TitleBlock({
   eyebrow,

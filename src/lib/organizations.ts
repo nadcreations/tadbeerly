@@ -5,6 +5,7 @@ import { recordAudit } from "@/lib/audit";
 import { ConflictError } from "@/lib/errors";
 import { normaliseEmail } from "@/lib/format";
 import { hashPassword } from "@/lib/password";
+import { validateNewPassword } from "@/lib/passwordReset";
 import { SYSTEM_ROLE_TEMPLATES } from "@/lib/permissions";
 import {
   generateInvitationToken,
@@ -38,7 +39,8 @@ export type CreateOrganizationInput = {
 
 /**
  * Creates an organization, its roles and its first administrator in one
- * transaction. Without a password the administrator is invited instead.
+ * transaction. Without a password the administrator is invited instead; a
+ * password that is given follows the same rule as every other one.
  * Not reachable over HTTP: operators run `npm run org:create`.
  */
 export async function createOrganizationWithAdmin(
@@ -46,6 +48,7 @@ export async function createOrganizationWithAdmin(
 ): Promise<{ organizationId: string; adminUserId: string; invitationUrl: string | null }> {
   const name = input.name.trim();
   const email = normaliseEmail(input.admin.email);
+  if (input.admin.password) validateNewPassword(input.admin.password);
   const passwordHash = input.admin.password
     ? await hashPassword(input.admin.password)
     : null;
