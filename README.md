@@ -330,6 +330,12 @@ when both are. Deploy previews must use a separate database (a Netlify DB
 branch, or a second database set as the deploy-preview context's
 `DATABASE_URL`), never production.
 
+Each function instance holds **one** database connection, and a long-running
+server holds ten. The app detects a serverless function at runtime (Netlify sets
+`NETLIFY` only while building, so it also checks the variables present while a
+function runs), and logs the pool size it chose once, on the first query. Set
+`DB_POOL_MAX` (a whole number, at least 1) to override the detection.
+
 ### Environment variables
 
 | Variable | Value |
@@ -341,6 +347,7 @@ branch, or a second database set as the deploy-preview context's
 | `EMAIL_TRANSPORT` | `console` until Graph is configured (emails then appear in the function logs) |
 | `EMAIL_FROM`, `EMAIL_FROM_NAME` | Sender address and display name |
 | `STORAGE_BACKEND` | Leave unset: Netlify Blobs is detected on Netlify |
+| `DB_POOL_MAX` | Leave unset: one connection per function is detected on Netlify |
 
 ### Release steps
 

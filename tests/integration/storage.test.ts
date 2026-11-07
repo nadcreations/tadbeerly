@@ -17,7 +17,13 @@ import {
 
 let root: string;
 const saved: Record<string, string | undefined> = {};
-const KEYS = ["STORAGE_BACKEND", "STORAGE_ROOT", "NETLIFY", "NETLIFY_BLOBS_CONTEXT"];
+const KEYS = [
+  "STORAGE_BACKEND",
+  "STORAGE_ROOT",
+  "NETLIFY",
+  "NETLIFY_BLOBS_CONTEXT",
+  "AWS_LAMBDA_FUNCTION_NAME",
+];
 
 beforeAll(async () => {
   for (const k of KEYS) saved[k] = process.env[k];
@@ -91,6 +97,16 @@ describe("backend selection", () => {
     process.env.NETLIFY_BLOBS_CONTEXT = "x";
     expect(storageBackend()).toBe("netlify-blobs");
     delete process.env.NETLIFY_BLOBS_CONTEXT;
+    process.env.STORAGE_BACKEND = "local";
+  });
+
+  test("serverless without a blob store stays on local disk", () => {
+    delete process.env.STORAGE_BACKEND;
+    delete process.env.NETLIFY;
+    delete process.env.NETLIFY_BLOBS_CONTEXT;
+    process.env.AWS_LAMBDA_FUNCTION_NAME = "plain-lambda";
+    expect(storageBackend()).toBe("local");
+    delete process.env.AWS_LAMBDA_FUNCTION_NAME;
     process.env.STORAGE_BACKEND = "local";
   });
 });

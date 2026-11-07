@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat, writeFile, unlink } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
+import { netlifyBlobsReachable } from "@/lib/runtime";
 
 /**
  * File storage behind a narrow interface.
@@ -40,27 +41,6 @@ export type StoredFile = {
  */
 export type StorageBackend = "sharepoint" | "netlify-blobs" | "local";
 
-/**
- * Whether a blob store is reachable from here.
- *
- * `NETLIFY` is set while a site is **built** and not while its functions
- * **run**, so detecting the platform by that variable alone chose local disk
- * inside a function — where the filesystem is read-only and every upload died
- * on `mkdir '/var/task/storage'`.
- *
- * So this asks the question that is actually meant. Not "is this Netlify",
- * which is a proxy, but "can a blob store be reached", which is the thing being
- * decided. The Blobs SDK resolves its own credentials from exactly these two
- * places, so agreeing with it means the detection cannot select a backend the
- * SDK would then refuse to use.
- */
-function blobsReachable(): boolean {
-  return Boolean(
-    (globalThis as { netlifyBlobsContext?: unknown }).netlifyBlobsContext ||
-      process.env.NETLIFY_BLOBS_CONTEXT,
-  );
-}
-
 export function storageBackend(): StorageBackend {
   const configured = process.env.STORAGE_BACKEND?.trim().toLowerCase();
   if (configured === "sharepoint") return "sharepoint";
@@ -71,8 +51,14 @@ export function storageBackend(): StorageBackend {
    * backend that needs a tenant, a site and a secret would fail confusingly;
    * guessing wrong on Netlify loses files silently, which is why that one is
    * detected.
+   *
+   * `NETLIFY` alone is not enough: it is set while a site is built and not
+   * while its functions run, where only the blobs context exists (see
+   * src/lib/runtime.ts). This asks whether a blob store can actually be
+   * reached, not merely whether this is serverless: a plain AWS Lambda has no
+   * blob store, so `isServerlessRuntime()` would be the wrong question here.
    */
-  if (process.env.NETLIFY || blobsReachable()) return "netlify-blobs";
+  if (process.env.NETLIFY || netlifyBlobsReachable()) return "netlify-blobs";
   return "local";
 }
 
