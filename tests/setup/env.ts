@@ -1,4 +1,4 @@
-import { loadEnv } from "@/lib/env";
+import { loadEnv, requireEnv } from "@/lib/env";
 
 loadEnv();
-process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+process.env.DATABASE_URL = requireEnv("TEST_DATABASE_URL");

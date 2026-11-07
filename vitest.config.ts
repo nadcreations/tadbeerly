@@ -7,6 +7,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    globalSetup: ["tests/setup/globalSetup.ts"],
     setupFiles: ["tests/setup/env.ts"],
     // The suite shares one test database.
     fileParallelism: false,
