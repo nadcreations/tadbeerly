@@ -1,7 +1,9 @@
-import { eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { db } from "@/db";
-import { organizations, users } from "@/db/schema";
+import { organizations, roles, users } from "@/db/schema";
+import { cloneRoleTemplates } from "@/lib/organizations";
+import { hashPassword } from "@/lib/password";
 import { allTableNames } from "./db";
 
 /** Empties every table, so each test starts from nothing. */
@@ -17,13 +19,73 @@ export async function resetDb(): Promise<void> {
 
 let orgSeq = 0;
 
-/** A bare organization. */
+/** An organization with its role templates cloned, as in production. */
 export async function makeOrg(name?: string) {
   const [org] = await db
     .insert(organizations)
     .values({ name: name ?? `Org ${++orgSeq} ${crypto.randomUUID().slice(0, 8)}` })
     .returning();
+  await cloneRoleTemplates(db, org.id);
   return org;
+}
+
+export async function roleOf(orgId: string, key: string) {
+  const [role] = await db
+    .select()
+    .from(roles)
+    .where(and(eq(roles.organizationId, orgId), eq(roles.key, key)));
+  return role;
+}
+
+let userSeq = 0;
+let passwordHashPromise: Promise<string> | undefined;
+const testPasswordHash = () => (passwordHashPromise ??= hashPassword("Password123!"));
+
+/** An active agent with the organization's role of that key; password Password123!. */
+export async function makeAgent(
+  orgId: string,
+  roleKey = "agent",
+  overrides: Partial<typeof users.$inferInsert> = {},
+) {
+  const role = await roleOf(orgId, roleKey);
+  const n = ++userSeq;
+  const [user] = await db
+    .insert(users)
+    .values({
+      organizationId: orgId,
+      email: `agent-${n}@${orgId.slice(0, 8)}.example`,
+      passwordHash: await testPasswordHash(),
+      firstName: "Agent",
+      lastName: `${n}`,
+      kind: "agent",
+      roleId: role.id,
+      status: "active",
+      ...overrides,
+    })
+    .returning();
+  return user;
+}
+
+/** An active requester (no role); password Password123!. */
+export async function makeRequester(
+  orgId: string,
+  overrides: Partial<typeof users.$inferInsert> = {},
+) {
+  const n = ++userSeq;
+  const [user] = await db
+    .insert(users)
+    .values({
+      organizationId: orgId,
+      email: `requester-${n}@${orgId.slice(0, 8)}.example`,
+      passwordHash: await testPasswordHash(),
+      firstName: "Requester",
+      lastName: `${n}`,
+      kind: "requester",
+      status: "active",
+      ...overrides,
+    })
+    .returning();
+  return user;
 }
 
 export async function orgByName(name: string) {
