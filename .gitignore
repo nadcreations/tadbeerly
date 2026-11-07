@@ -1,0 +1,23 @@
+node_modules/
+.next/
+.next-check/
+out/
+build/
+dist/
+
+# Environment files: only .env.example is committed.
+.env*
+!.env.example
+
+*.tsbuildinfo
+next-env.d.ts
+
+.DS_Store
+*.log
+npm-debug.log*
+
+# Uploaded files (local storage backend)
+storage/
+
+# Netlify CLI link state, machine-specific.
+.netlify/
