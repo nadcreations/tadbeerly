@@ -3,6 +3,7 @@ import postgres from "postgres";
 import * as schema from "./schema";
 import { databaseUrl, loadEnv } from "@/lib/env";
 import { isServerlessRuntime } from "@/lib/runtime";
+import { connectionOptions } from "./connection";
 
 /**
  * The database handle.
@@ -62,8 +63,12 @@ function connect(): Database {
     const max = resolvePoolMax();
     const serverless = isServerlessRuntime();
     // DATABASE_URL, falling back to Netlify DB's NETLIFY_DATABASE_URL.
-    client = postgres(databaseUrl(), {
+    const url = databaseUrl();
+    const { prepare, ssl } = connectionOptions(url);
+    client = postgres(url, {
       max,
+      prepare,
+      ...(ssl === undefined ? {} : { ssl }),
       /*
        * Neon closes idle connections, and a serverless instance is idle
        * between invocations. Giving up on an unreachable socket quickly beats

@@ -334,18 +334,29 @@ Passkeys, SMS codes and trusted devices are not available either.
 
 ## Deployment
 
-Target: Netlify, with the Netlify DB (Neon) extension. Next.js is auto-detected,
+Target: Netlify for the app, Supabase for PostgreSQL. Next.js is auto-detected,
 so there is no `netlify.toml`.
 
-Production URL: _to be filled in after the first deploy_
+Production URL: https://tadbeerly.netlify.app
 
-### Database
+### Database (Supabase)
 
-Enable the Netlify DB extension on the site. It sets `NETLIFY_DATABASE_URL`;
-the app falls back to it when `DATABASE_URL` is not set, and `DATABASE_URL` wins
-when both are. Deploy previews must use a separate database (a Netlify DB
-branch, or a second database set as the deploy-preview context's
-`DATABASE_URL`), never production.
+1. Create a Supabase project. Under **Connect**, copy two connection strings:
+   - the **transaction pooler** (host `…pooler.supabase.com`, port **6543**) —
+     this is the app's `DATABASE_URL` on Netlify. Serverless functions open and
+     close connections constantly, which is what the pooler is for, and it is
+     reachable over IPv4 (Supabase's direct connection is IPv6-only).
+   - the **session pooler** (same host, port **5432**) — use this one to run
+     migrations from your machine.
+2. Nothing else is needed in code: `src/db/connection.ts` turns prepared
+   statements off on port 6543 (the transaction pooler cannot keep them between
+   transactions) and requires SSL for any non-local host unless the URL sets its
+   own `sslmode`. `DB_PREPARE=false` forces prepared statements off elsewhere.
+3. If the Netlify DB (Neon) extension is installed, remove it, or leave it:
+   `DATABASE_URL` always wins over its `NETLIFY_DATABASE_URL`.
+4. Deploy previews must never point at production: give the deploy-preview
+   context its own `DATABASE_URL` (a second Supabase project or a branch), or
+   turn deploy previews off until you have one.
 
 Each function instance holds **one** database connection, and a long-running
 server holds ten. The app detects a serverless function at runtime (Netlify sets
@@ -357,6 +368,7 @@ function runs), and logs the pool size it chose once, on the first query. Set
 
 | Variable | Value |
 | --- | --- |
+| `DATABASE_URL` | Supabase **transaction pooler** connection string (port 6543) |
 | `SESSION_SECRET` | `openssl rand -hex 32` |
 | `MFA_ENCRYPTION_KEY` | `openssl rand -hex 32` (separate from the session secret). Set it **before the first enrolment** and keep it: see below. |
 | `CRON_SECRET` | `openssl rand -hex 32`. Production context only: leave it **unset** in deploy previews. |
@@ -366,6 +378,7 @@ function runs), and logs the pool size it chose once, on the first query. Set
 | `GRAPH_MAIL_SENDER` | Only if the mailbox Graph sends from differs from `EMAIL_FROM` |
 | `STORAGE_BACKEND` | Leave unset: Netlify Blobs is detected on Netlify |
 | `DB_POOL_MAX` | Leave unset: one connection per function is detected on Netlify |
+| `DB_PREPARE` | Leave unset: prepared statements are turned off automatically on port 6543 |
 
 > **`EMAIL_TRANSPORT=console` in production is for acceptance testing only.**
 > Password-reset and invitation emails never reach anyone, and the function
@@ -381,8 +394,21 @@ function runs), and logs the pool size it chose once, on the first query. Set
 
 ### Release steps
 
-1. Migrate production: `DATABASE_URL="<production connection string>" npm run db:migrate`
-2. Create the first organization: `DATABASE_URL="<production connection string>" npm run org:create`
+Run these from your machine (WSL, in `~/tadbeerly`) with the Supabase
+**session pooler** string (port 5432). Keep the string out of shell history and
+chat — for example, paste it into `read -rs DB` first:
+
+```bash
+read -rs DB   # paste the session pooler URL, then Enter (nothing is echoed)
+DATABASE_URL="$DB" npm run db:migrate
+DATABASE_URL="$DB" npm run org:create -- --name "<Organization>" --email <admin@example.com> --first <First> --last <Last>
+unset DB
+```
+
+1. `db:migrate` creates the tables (safe to re-run: applied migrations are skipped).
+2. `org:create` without `--password` creates the Administrator as *invited* and
+   prints an invitation link. They open it, choose a password, and are taken to
+   two-step enrolment.
 3. **Never run `db:seed` in production.** It refuses non-local hosts anyway.
 
 ### Platform notes
@@ -393,8 +419,8 @@ function runs), and logs the pool size it chose once, on the first query. Set
   Without `CRON_SECRET` it logs a warning and returns 200 "CRON_SECRET not set"
   without calling the endpoint.
 - Audit IP addresses come from `x-forwarded-for`, which Netlify's proxy sets.
-- The build fetches IBM Plex from Google Fonts. A transient failure there is
-  cleared by redeploying.
+- IBM Plex is self-hosted (`src/app/fonts/`), so the build makes no network
+  request for fonts.
 - Moving email off `console`: set `EMAIL_TRANSPORT=graph`, with `EMAIL_FROM` a
   real mailbox (or `GRAPH_MAIL_SENDER` naming the mailbox to send from, when it
   differs), and the `GRAPH_*` credentials (they fall back to the
