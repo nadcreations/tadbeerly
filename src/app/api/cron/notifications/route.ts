@@ -46,7 +46,13 @@ export async function POST(request: Request) {
     sent += result.sent;
     failed += result.failed;
     deferred += result.deferred;
-    if (result.sent + result.failed + result.deferred === 0) break;
+    /*
+     * Stop when a batch delivers nothing: either the outbox is empty, or every
+     * row in it failed, which means the mail service is down. Claiming the next
+     * batch would only spend more attempts against the same outage; those rows
+     * keep their attempts for the next run.
+     */
+    if (result.sent === 0) break;
   }
 
   return NextResponse.json({ dispatched: { sent, failed, deferred } });

@@ -86,6 +86,17 @@ export async function recipientsByUserIds(
 
 const MAX_ATTEMPTS = 5;
 
+/**
+ * How long a row waits after a failed send before it is tried again, indexed
+ * by the attempt that just failed: attempt 1 waits 1 minute, attempt 2 waits
+ * 5, attempt 3 waits 15, attempt 4 waits 60. Attempt 5 is the last, so a
+ * failure there marks the row `failed` instead.
+ *
+ * Without a wait, a deferred row was re-claimed by the very next batch of the
+ * same drain, and one short outage burned all five attempts in a single run.
+ */
+export const RETRY_BACKOFF_MINUTES = [1, 5, 15, 60] as const;
+
 /** How long a claim holds a row. Covers the send budget plus the worst single send. */
 const LEASE = sql`interval '5 minutes'`;
 
@@ -101,6 +112,10 @@ const LEASE = sql`interval '5 minutes'`;
  * attempt already counted, and a row whose final attempt never finished is
  * swept to `failed`. Delivery is at-least-once, which is the right trade for
  * email.
+ *
+ * A failed send that has attempts left keeps the row `pending` and moves
+ * `claimed_until` forward by RETRY_BACKOFF_MINUTES, so the claim (which skips
+ * any row whose `claimed_until` is still ahead) leaves it alone until then.
  */
 export async function dispatchPending(
   limit = 50,
@@ -206,12 +221,17 @@ export async function dispatchPending(
         const message =
           sendError instanceof Error ? sendError.message : String(sendError);
         const exhausted = row.attempts >= MAX_ATTEMPTS;
+        const waitMinutes =
+          RETRY_BACKOFF_MINUTES[Math.min(row.attempts, RETRY_BACKOFF_MINUTES.length) - 1];
         await db
           .update(emailNotifications)
           .set({
             status: exhausted ? "failed" : "pending",
             lastError: message.slice(0, 1000),
-            claimedUntil: null,
+            // The database's clock, like the claim that will compare against it.
+            claimedUntil: exhausted
+              ? null
+              : sql`now() + make_interval(mins => ${waitMinutes}::int)`,
           })
           .where(claim(row));
         if (exhausted) {
@@ -221,7 +241,9 @@ export async function dispatchPending(
           );
         } else {
           deferred += 1;
-          console.warn(`[email] deferring ${row.id}: ${message}`);
+          console.warn(
+            `[email] deferring ${row.id} for ${waitMinutes} min after attempt ${row.attempts}: ${message}`,
+          );
         }
       }
     } catch (writeError) {

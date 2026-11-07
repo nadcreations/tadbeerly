@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { emailNotifications } from "@/db/schema";
 import {
+  RETRY_BACKOFF_MINUTES,
   dispatchPending,
   enqueue,
   recipientsByUserIds,
@@ -22,6 +23,20 @@ const row = (organizationId: string, n = 0): EnqueueInput => ({
 
 function fakeTransport(send: EmailTransport["send"]): EmailTransport {
   return { name: "fake", send };
+}
+
+/** Moves every lease and backoff into the past, as if the wait had run out. */
+const backoffElapses = () =>
+  db.execute(
+    sql`update email_notifications set claimed_until = now() - interval '1 second' where claimed_until is not null`,
+  );
+
+/** Seconds from the database's now() until the only row's claimed_until. */
+async function secondsUntilRetry(): Promise<number> {
+  const [r] = (await db.execute(
+    sql`select extract(epoch from claimed_until - now())::float8 as seconds from email_notifications`,
+  )) as unknown as { seconds: number }[];
+  return Number(r.seconds);
 }
 
 beforeEach(async () => {
@@ -67,6 +82,8 @@ describe("outbox", () => {
 
     for (let i = 0; i < 4; i += 1) {
       expect(await dispatchPending()).toEqual({ sent: 0, failed: 0, deferred: 1 });
+      // Each failure backs the row off; let the wait run out.
+      await backoffElapses();
     }
     expect(await dispatchPending()).toEqual({ sent: 0, failed: 1, deferred: 0 });
 
@@ -75,6 +92,57 @@ describe("outbox", () => {
     expect(r.attempts).toBe(5);
     expect(r.lastError).toBe("smtp down");
     expect(send).toHaveBeenCalledTimes(5);
+  });
+
+  test("the retry schedule is 1, 5, 15 and 60 minutes", () => {
+    expect(RETRY_BACKOFF_MINUTES).toEqual([1, 5, 15, 60]);
+  });
+
+  test("a failed send backs the row off for a minute instead of releasing it", async () => {
+    const org = await makeOrg();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    setTransportForTests(fakeTransport(vi.fn().mockRejectedValue(new Error("smtp down"))));
+    await enqueue(db, [row(org.id)]);
+
+    expect(await dispatchPending()).toEqual({ sent: 0, failed: 0, deferred: 1 });
+    const [r] = await db.select().from(emailNotifications);
+    expect(r.status).toBe("pending");
+    expect(r.attempts).toBe(1);
+    const seconds = await secondsUntilRetry();
+    expect(seconds).toBeGreaterThan(50);
+    expect(seconds).toBeLessThanOrEqual(60);
+  });
+
+  test("an immediate second dispatch does not re-send a backed-off row", async () => {
+    const org = await makeOrg();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const send = vi.fn().mockRejectedValue(new Error("smtp down"));
+    setTransportForTests(fakeTransport(send));
+    await enqueue(db, [row(org.id)]);
+
+    await dispatchPending();
+    expect(await dispatchPending()).toEqual({ sent: 0, failed: 0, deferred: 0 });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((await db.select().from(emailNotifications))[0].attempts).toBe(1);
+  });
+
+  test("once the backoff runs out the row is retried, and a second failure waits 5 minutes", async () => {
+    const org = await makeOrg();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const send = vi.fn().mockRejectedValue(new Error("smtp down"));
+    setTransportForTests(fakeTransport(send));
+    await enqueue(db, [row(org.id)]);
+
+    await dispatchPending();
+    await backoffElapses();
+    expect(await dispatchPending()).toEqual({ sent: 0, failed: 0, deferred: 1 });
+    expect(send).toHaveBeenCalledTimes(2);
+    const [r] = await db.select().from(emailNotifications);
+    expect(r.status).toBe("pending");
+    expect(r.attempts).toBe(2);
+    const seconds = await secondsUntilRetry();
+    expect(seconds).toBeGreaterThan(5 * 60 - 10);
+    expect(seconds).toBeLessThanOrEqual(5 * 60);
   });
 
   test("two dispatchers never send the same row twice", async () => {

@@ -106,7 +106,11 @@ whom.
 
 Delivery is at-least-once. Rows are claimed with `FOR UPDATE SKIP LOCKED` under
 a five-minute lease and their attempt counter is incremented before sending.
-After five failed attempts a row is marked `failed` and left alone.
+A failed send waits before its next attempt: 1 minute after the first failure,
+then 5, 15 and 60 minutes (`RETRY_BACKOFF_MINUTES` in `src/lib/email/outbox.ts`).
+After five failed attempts a row is marked `failed` and left alone. A drain stops
+early when a whole batch sends nothing, so an outage does not spend everyone's
+attempts at once.
 
 Two things drain the outbox:
 
