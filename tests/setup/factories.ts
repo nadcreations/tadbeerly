@@ -6,18 +6,10 @@ import type { Actor } from "@/lib/authz";
 import type { Permission } from "@/lib/permissions";
 import { cloneRoleTemplates } from "@/lib/organizations";
 import { hashPassword } from "@/lib/password";
-import { allTableNames } from "./db";
+import { truncateAllTables } from "@/db/truncate";
 
 /** Empties every table, so each test starts from nothing. */
-export async function resetDb(): Promise<void> {
-  const names = await allTableNames();
-  if (names.length === 0) return;
-  const list = sql.join(
-    names.map((n) => sql.identifier(n)),
-    sql`, `,
-  );
-  await db.execute(sql`truncate table ${list} restart identity cascade`);
-}
+export const resetDb = truncateAllTables;
 
 let orgSeq = 0;
 

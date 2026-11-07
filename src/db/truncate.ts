@@ -13,3 +13,14 @@ export async function allTableNames(): Promise<string[]> {
   `);
   return rows.map((r) => r.table_name);
 }
+
+/** Empties every table. Shared by the test reset and the demo seed. */
+export async function truncateAllTables(): Promise<void> {
+  const names = await allTableNames();
+  if (names.length === 0) return;
+  const list = sql.join(
+    names.map((n) => sql.identifier(n)),
+    sql`, `,
+  );
+  await db.execute(sql`truncate table ${list} restart identity cascade`);
+}
