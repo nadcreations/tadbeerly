@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { db } from "@/db";
 import { auditEvents, emailNotifications, invitations, organizations, users } from "@/db/schema";
 import { seed } from "@/db/seed";
+import { truncateAllTables } from "@/db/truncate";
 import { listAgents } from "@/lib/agents";
 import { verifyPassword } from "@/lib/password";
 import { count, orgByName, roleOf } from "../setup/factories";
@@ -56,12 +57,25 @@ describe("seed", () => {
     const pending = await db.select().from(invitations).where(eq(invitations.userId, gina.id));
     expect(pending.map((i) => i.status)).toEqual(["pending"]);
 
-    expect(await count(auditEvents)).toBeGreaterThanOrEqual(15);
+    expect(await count(auditEvents)).toBe(25);
     expect(await count(emailNotifications)).toBe(0);
   });
 
-  test("refuses any database that is not local", async () => {
+  test("refuses any database that is not local, and truncates nothing", async () => {
+    await seed();
     process.env.DATABASE_URL = "postgresql://u:p@db.example.com:5432/prod";
-    await expect(seed()).rejects.toThrow(/localhost|127\.0\.0\.1/);
+    await expect(seed()).rejects.toThrow(/localhost|127.0.0.1/);
+    process.env.DATABASE_URL = realUrl;
+    expect(await count(organizations)).toBe(2);
+    expect(await count(auditEvents)).toBe(25);
+  });
+
+  test("truncateAllTables refuses a non-local database and leaves data intact", async () => {
+    await seed();
+    process.env.DATABASE_URL = "postgresql://u:p@db.example.com:5432/prod";
+    await expect(truncateAllTables()).rejects.toThrow(/Refusing/);
+    process.env.DATABASE_URL = realUrl;
+    expect(await count(organizations)).toBe(2);
+    expect(await count(auditEvents)).toBe(25);
   });
 });

@@ -15,11 +15,12 @@ import { pathToFileURL } from "node:url";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { emailNotifications, organizations, roles, users } from "@/db/schema";
+import { assertLocalDatabase } from "@/db/localGuard";
 import { truncateAllTables } from "@/db/truncate";
 import { changeAgentRole, inviteAgent, setAgentStatus } from "@/lib/agents";
 import { recordAudit } from "@/lib/audit";
 import type { Actor } from "@/lib/authz";
-import { setTransportForTests } from "@/lib/email/transport";
+import { setTransportOverride } from "@/lib/email/transport";
 import { loadEnv } from "@/lib/env";
 import { acceptInvitation } from "@/lib/invitations";
 import { createOrganizationWithAdmin } from "@/lib/organizations";
@@ -28,24 +29,6 @@ import { ALL_PERMISSIONS } from "@/lib/permissions";
 import { createRole, updateRolePermissions } from "@/lib/rolesAdmin";
 
 export const DEMO_PASSWORD = "Password123!";
-
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
-
-/** Throws unless the database this process would write to is on this machine. */
-function assertLocalDatabase(): void {
-  const url = process.env.DATABASE_URL ?? process.env.NETLIFY_DATABASE_URL;
-  let host: string | null = null;
-  try {
-    host = url ? new URL(url).hostname : null;
-  } catch {
-    host = null;
-  }
-  if (!host || !LOCAL_HOSTS.has(host)) {
-    throw new Error(
-      `Refusing to seed: the seed empties every table, so it only runs against a database on localhost or 127.0.0.1 (DATABASE_URL host is ${host ?? "missing or unreadable"}).`,
-    );
-  }
-}
 
 export type SeedSummary = {
   accounts: { organization: string; email: string; name: string; role: string }[];
@@ -60,7 +43,7 @@ const tokenOf = (url: string) => url.split("/").pop()!;
  * the outbox is cleared at the end regardless.
  */
 function silenceMail(): void {
-  setTransportForTests({ name: "seed", send: async () => {} });
+  setTransportOverride({ name: "seed", send: async () => {} });
 }
 
 export async function runSeed(): Promise<SeedSummary> {

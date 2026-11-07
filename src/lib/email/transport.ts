@@ -272,10 +272,13 @@ class GraphTransport implements EmailTransport {
 let cached: EmailTransport | null = null;
 let override: EmailTransport | null = null;
 
-/** Tests swap in a fake transport; pass null to restore the configured one. */
-export function setTransportForTests(t: EmailTransport | null): void {
+/** Replaces the configured transport; pass null to restore it. Used by tests and the demo seed. */
+export function setTransportOverride(t: EmailTransport | null): void {
   override = t;
 }
+
+/** Tests swap in a fake transport; pass null to restore the configured one. */
+export const setTransportForTests = setTransportOverride;
 
 export function getTransport(): EmailTransport {
   if (override) return override;

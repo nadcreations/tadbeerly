@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { assertLocalDatabase } from "@/db/localGuard";
 
 /**
  * Every table in the public schema, read from the database rather than listed
@@ -16,6 +17,7 @@ export async function allTableNames(): Promise<string[]> {
 
 /** Empties every table. Shared by the test reset and the demo seed. */
 export async function truncateAllTables(): Promise<void> {
+  assertLocalDatabase();
   const names = await allTableNames();
   if (names.length === 0) return;
   const list = sql.join(

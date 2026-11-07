@@ -235,7 +235,7 @@ npm run dev            # http://localhost:3000
 ```
 
 **`db:seed` empties every table.** It refuses to run unless the host in
-`DATABASE_URL` is `localhost` or `127.0.0.1`, and there is no override. It
+`DATABASE_URL` is `localhost` or `127.0.0.1`, and there is no override. (`[::1]`, socket-style and multi-host URLs are refused too, so use `127.0.0.1`.) It
 leaves the email outbox empty, so seeding never sends mail.
 
 ## Demo accounts
